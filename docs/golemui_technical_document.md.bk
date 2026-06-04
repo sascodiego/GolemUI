@@ -1,0 +1,605 @@
+# GolemUI: Manual de Especificaciones Técnicas y Diseño de Arquitectura
+
+GolemUI es un motor de renderizado dinámico y reactivo (Data-Driven UI Engine) desarrollado en Go que desacopla la interfaz de usuario del backend. Toda la estructura visual, la composición de pantallas, el sistema de diseño y la lógica transaccional se definen y controlan directamente desde una base de datos PostgreSQL, utilizando un cargador efímero en Lua para establecer la conexión inicial.
+
+Este manual detalla las especificaciones técnicas del motor, estructurado bajo un principio unificado de **composición jerárquica**, donde todas las vistas (incluyendo consultas y CRUDs autogenerados) se procesan a través de un núcleo único de composición visual.
+
+---
+
+## 1. Arquitectura General y Flujo de Datos
+
+GolemUI rompe el acoplamiento clásico cliente-servidor mediante un cliente visual "ciego" que interpreta un árbol jerárquico de metadatos del catálogo de PostgreSQL.
+
+```mermaid
+graph TD
+    A[Cliente GolemUI Go] -->|1. Lee configuración| B[Driver Lua (Efímero)]
+    A -->|2. Inyecta tokens de diseño y menú| C[Esquema de Sistema golemui]
+    A -->|3. Introspección / Consulta de pantallas| C
+    A -->|4. Ejecuta transacción RPC / Consulta| D[Esquema de Negocio public]
+    C -->|5. Invalidación por NOTIFY| A
+```
+
+### Capas del Sistema
+
+1. **Cliente GolemUI (Go):** Intérprete gráfico multiplataforma. Su responsabilidad es renderizar primitivas visuales, aplicar los tokens del sistema de diseño, validar las entradas del usuario localmente, orquestar la reactividad local del cliente y procesar las respuestas JSON de la base de datos.
+2. **Bootstrapper (Lua):** Archivo de arranque para configurar credenciales e iniciar el bootstrap. La máquina virtual de Lua asociada se destruye inmediatamente tras extraer los parámetros para evitar fugas de memoria.
+3. **Esquema de Sistema (`golemui`):** Contiene el catálogo de componentes de UI soportados, la definición de estilos de diseño, las tablas de control de sesión temporal, el registro de consultas complejas y las funciones de introspección semántica.
+4. **Esquema de Negocio (Ej: `public` o esquemas específicos):** Tablas de la aplicación final (datos médicos, inventarios, transacciones) y procedimientos almacenados (Stored Procedures).
+
+---
+
+## 2. El Núcleo del Motor: Composición Jerárquica (Composite Layouts)
+
+El núcleo absoluto de GolemUI en Go es un **Compositor de Layouts Jerárquicos** que procesa recursivamente un árbol de componentes. El motor en Go no cuenta con flujos de pintado paralelos para pantallas simples o complejas; **todas las interfaces de la aplicación se resuelven como un caso particular de una Pantalla Compuesta (`composite_screen`)**.
+
+```mermaid
+graph TD
+    Root[Composite Screen: POS] -->|Grid Layout: columns '2fr, 1.2fr, 1.2fr'| Col1[Columna 1: 2fr]
+    Root --> Col2[Columna 2: 1.2fr]
+    Root --> Col3[Columna 3: 1.2fr]
+    Col1 -->|Widget Terminal| Cart[cart_viewer]
+    Col2 -->|Widget Terminal| Keypad[numeric_keypad]
+    Col3 -->|Composite Sub-layout| SubForm[payment_form_panel]
+    SubForm -->|Widget Terminal| SelectClient[dropdown_select]
+    SubForm -->|Widget Terminal| TotalDisplay[text_label]
+```
+
+### El Parser Recursivo
+El parser lee el JSON de definición y construye la pantalla de forma jerárquica:
+*   **Nodos Contenedores**: Elementos estructurales (`grid`, `flex`, `tabs`) que organizan el espacio en proporción (`fr`, `auto`, `gap`) y anidan otros nodos de manera recursiva.
+*   **Nodos Terminales (Widgets)**: Elementos de entrada o salida de datos (`text_input`, `data_grid`, `numeric_keypad`, `click_button`).
+
+### JSON Schema de Pantallas Compuestas (`composite_screen`)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GolemUICompositeSpec",
+  "type": "object",
+  "properties": {
+    "ui_title": { "type": "string" },
+    "ui_type": { "type": "string", "const": "composite_screen" },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["grid", "flex", "tabs"] },
+        "columns": { "type": "array", "items": { "type": "string" } },
+        "rows": { "type": "array", "items": { "type": "string" } },
+        "gap": { "type": "string" }
+      },
+      "required": ["type"]
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area": { "type": "string" },
+          "component_ref": { "type": "string" }, -- Puede ser otro sub-layout o un widget terminal
+          "data_source": { "type": "string" },    -- Stored Procedure o vista de negocio
+          "submit_action": { "type": "string" },  -- Stored Procedure transaccional
+          "bind_to": { "type": "string" },         -- Canal de comunicación en el Event Bus local
+          "layout": { "$ref": "#/properties/layout" }, -- Recursividad nativa de layouts
+          "children": { "$ref": "#/properties/children" }
+        },
+        "required": ["area", "component_ref"]
+      }
+    }
+  },
+  "required": ["ui_title", "ui_type", "layout", "children"]
+}
+```
+
+### Reactividad Local del Cliente (Event Bus)
+Para evitar la latencia y viajes de red innecesarios al presionar botones o realizar micro-interacciones rápidas, el motor Go implementa un **Event Bus de Cliente** local.
+*   Los widgets publican eventos locales en canales de memoria (ej. `number_pressed`, `item_selected`).
+*   Otros widgets de la pantalla se suscriben a dichos canales mediante el metadato `"bind_to"`.
+*   El estado consolidado se guarda únicamente al confirmar la acción del formulario en Postgres.
+
+---
+
+## 3. Consultas y Vistas de Datos bajo el Compositor
+
+Las consultas de datos y reportes se resuelven como una instanciación particular del Compositor Jerárquico. Cuando una pantalla de tipo consulta es invocada, el cliente Go la transforma en memoria en un layout compuesto con dos secciones:
+
+1.  **Filtros (Panel Superior/Lateral)**: Un sub-layout de tipo `flex` o `grid` que renderiza dinámicamente los widgets de filtrado.
+2.  **Grilla de Resultados**: Un widget terminal de tipo `data_grid` enlazado a la función centralizada de procesamiento en PostgreSQL.
+
+### Catálogo de Consultas y Presets en la BD
+
+```sql
+CREATE SCHEMA IF NOT EXISTS golemui;
+
+-- Catálogo de pantallas de consulta del sistema
+CREATE TABLE golemui.vistas_consulta (
+    id VARCHAR(100) PRIMARY KEY,
+    titulo VARCHAR(150) NOT NULL,
+    origen_datos VARCHAR(150) NOT NULL, -- Nombre de la vista física SQL (Ej: 'public.vista_pacientes')
+    config_columnas JSONB NOT NULL,     -- Títulos de columna, tipo de dato, visibilidad
+    config_filtros JSONB NOT NULL       -- Definición de filtros permitidos (Ej: rango fecha, texto, fk)
+);
+
+-- Vistas personalizadas guardadas por los usuarios (Presets de Filtros)
+CREATE TABLE golemui.vistas_guardadas (
+    id SERIAL PRIMARY KEY,
+    vista_consulta_id VARCHAR(100) REFERENCES golemui.vistas_consulta(id),
+    nombre_preset VARCHAR(150) NOT NULL,
+    usuario_id VARCHAR(100) NOT NULL,
+    filtros_aplicados JSONB NOT NULL,     -- Estado de los filtros: {"estado": "critico", "fecha": "2026-06-04"}
+    orden_columnas JSONB,
+    es_predeterminada BOOLEAN DEFAULT FALSE
+);
+```
+
+### Ejecución Dinámica de Consultas
+Cuando el usuario cambia filtros en la UI, el cliente Go emite las reglas en un formato JSONB estructurado a la función centralizada en Postgres:
+
+```sql
+CREATE OR REPLACE FUNCTION golemui.ejecutar_consulta_filtrada(
+    p_vista_id VARCHAR,
+    p_filtros_json JSONB,
+    p_limit INT DEFAULT 50,
+    p_offset INT DEFAULT 0
+) RETURNS JSONB AS $$
+DECLARE
+    v_origen VARCHAR;
+    v_sql TEXT;
+    v_where TEXT := '1=1';
+    v_resultado JSONB;
+    r RECORD;
+BEGIN
+    SELECT origen_datos INTO v_origen FROM golemui.vistas_consulta WHERE id = p_vista_id;
+    IF v_origen IS NULL THEN
+        RAISE EXCEPTION 'VISTA DE CONSULTA % NO ENCONTRADA', p_vista_id;
+    END IF;
+    
+    FOR r IN SELECT * FROM jsonb_each_text(p_filtros_json)
+    LOOP
+        IF r.value IS NOT NULL AND r.value <> '' THEN
+            v_where := v_where || format(' AND %I::text ILIKE %L', r.key, '%' || r.value || '%');
+        END IF;
+    END LOOP;
+    
+    v_sql := format('SELECT json_agg(t) FROM (SELECT * FROM %I WHERE %s LIMIT %L OFFSET %L) t', 
+                    v_origen, v_where, p_limit, p_offset);
+                    
+    EXECUTE v_sql INTO v_resultado;
+    RETURN COALESCE(v_resultado, '[]'::jsonb);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+---
+
+## 4. Auto-Scaffolding para CRUDs Simples
+
+Para resolver pantallas básicas de tipo CRUD sin escribir configuraciones manuales, el motor inspecciona el catálogo de base de datos (`information_schema.columns` e `information_schema.table_constraints`) y **genera dinámicamente un árbol de metadatos de tipo `composite_screen` en la memoria del cliente Go**, el cual es inyectado inmediatamente en el compositor.
+
+```text
+Estructura deducida en memoria:
+composite_screen (Root Layout)
+ ├── Fila 1 (Toolbar): Filtros rápidos y botón "Nuevo"
+ ├── Fila 2 (Cuerpo): Grid de 2 columnas
+ │    ├── Columna Izquierda: data_grid (Lista de registros)
+ │    └── Columna Derecha / Modal: Formulario (Creado a partir de tipos SQL)
+```
+
+### Reglas de Conversión de Tipos SQL a Widgets del Compositor
+
+| Tipo de Columna SQL | Componente UI Generado | Restricción / Validaciones inyectadas |
+| :--- | :--- | :--- |
+| `character varying` / `text` | `text_input` o `text_area` | Lee la longitud máxima y genera `validation: "max_len:N"`. |
+| `integer` / `numeric` / `double` | `numeric_stepper` | Restringe caracteres alfanuméricos localmente. |
+| `boolean` | `checkbox_toggle` | Toggle booleano básico. |
+| `date` / `timestamp` | `date_picker` | Selector de calendario nativo. |
+| Clave Foránea (`FOREIGN KEY`) | `dropdown_select` | El cliente Go consulta la tabla referenciada y extrae los pares `id` / `nombre` (o `descripcion`) para poblar las opciones. |
+| Clave Primaria (`PRIMARY KEY`) | Oculto / Deshabilitado | Excluido de los formularios de inserción. |
+
+---
+
+## 5. El Esquema de Sistema `golemui` en Postgres
+
+```sql
+-- Catálogo de componentes de UI estándar permitidos por el intérprete
+CREATE TABLE golemui.componentes (
+    id VARCHAR(50) PRIMARY KEY,
+    descripcion TEXT NOT NULL
+);
+
+INSERT INTO golemui.componentes (id, descripcion) VALUES
+('click_button', 'Botón de ejecución transaccional'),
+('text_input', 'Input de texto de una sola línea'),
+('text_area', 'Input de texto multilínea'),
+('numeric_stepper', 'Selector numérico con límites definidos'),
+('barcode_reader', 'Control optimizado para entrada de escáneres rápidos'),
+('data_grid', 'Grilla estructurada para visualización y selección de filas'),
+('dropdown_select', 'Selector de opciones basado en claves foráneas'),
+('date_picker', 'Selector gráfico de fechas calendarizadas'),
+('checkbox_toggle', 'Selector booleano interactivo'),
+('numeric_keypad', 'Teclado numérico táctil para ingreso rápido de datos');
+
+-- Sistema de Diseño Semántico (Semantic Design Tokens)
+CREATE TABLE golemui.estilos (
+    id VARCHAR(50) PRIMARY KEY,
+    color_fondo VARCHAR(7) NOT NULL,
+    color_texto VARCHAR(7) NOT NULL,
+    border_radius VARCHAR(20) NOT NULL DEFAULT 'smooth', -- 'sharp', 'smooth', 'rounded'
+    font_size VARCHAR(20) NOT NULL DEFAULT 'medium',     -- 'small', 'medium', 'large'
+    font_weight VARCHAR(20) NOT NULL DEFAULT 'normal'    -- 'light', 'normal', 'bold'
+);
+
+INSERT INTO golemui.estilos (id, color_fondo, color_texto, border_radius, font_size, font_weight) VALUES
+('primary_action', '#3498db', '#ffffff', 'smooth', 'medium', 'bold'),
+('success', '#2ecc71', '#ffffff', 'smooth', 'medium', 'bold'),
+('danger', '#e74c3c', '#ffffff', 'smooth', 'medium', 'bold'),
+('input_standard', '#ffffff', '#2c3e50', 'sharp', 'small', 'normal'),
+('sidebar_panel', '#2c3e50', '#ecf0f1', 'sharp', 'small', 'normal'),
+('table_header', '#34495e', '#ffffff', 'sharp', 'small', 'bold'),
+('table_cell', '#ffffff', '#2c3e50', 'sharp', 'small', 'normal');
+```
+
+---
+
+## 6. Control de Estado de Sesión en la Base de Datos
+
+GolemUI promueve que el cliente Go no mantenga estado de negocio. Sin embargo, flujos interactivos complejos (como el llenado de una orden médica con múltiples recetas, la edición de un presupuesto, o un carrito de compras en un punto de venta) requieren acumular cambios en memoria antes de la confirmación física.
+
+Para evitar inconsistencias por caídas de red o cancelaciones y mantener la ligereza del cliente, GolemUI implementa un esquema de almacenamiento temporal en base de datos vinculado a la sesión de la aplicación.
+
+```sql
+-- Tabla genérica para almacenamiento temporal de formularios / borradores
+CREATE TABLE golemui.sesion_borrador (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(100) NOT NULL,  -- Identificador de sesión de GolemUI
+    clave_campo VARCHAR(100) NOT NULL, -- Nombre de la variable / control
+    valor_json JSONB NOT NULL,          -- Contenido del dato serializado
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_golemui_borrador_sesion ON golemui.sesion_borrador(session_id);
+```
+
+### Flujo de Trabajo Transaccional
+1. **Acumulación**: El cliente envía eventos intermedios (ej. agregar ítem, guardar borrador de examen) invocando stored procedures que registran los datos en `golemui.sesion_borrador`.
+2. **Validación y Consolidación**: El botón final de la pantalla dispara un stored procedure principal que valida la integridad de los datos acumulados en el borrador de esa sesión, efectúa los cambios de negocio atómicamente y limpia la tabla de borrador de sesión.
+3. **Cancelación**: Si la sesión se cierra inesperadamente o el cliente descarta la pantalla, los datos de negocio permanecen limpios.
+
+---
+
+## 7. Estándar de Metadatos (JSON Schema en `COMMENT ON`)
+
+Las pantallas de formularios simples mapeadas a Stored Procedures también son procesadas por el compositor. Al momento de invocarse, se transforman en una `composite_screen` de una sola columna y un botón de acción.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GolemUICommentSpec",
+  "type": "object",
+  "properties": {
+    "ui_title": { "type": "string" },
+    "ui_type": { "type": "string", "enum": ["form_action", "view_panel", "hybrid_screen"] },
+    "ui_layout": {
+      "type": "object",
+      "properties": {
+        "menu_zone": { "type": "string" },
+        "order": { "type": "integer" },
+        "zone": { "type": "string", "enum": ["main_content", "sidebar_right", "sidebar_left", "header", "footer"] },
+        "component": { "type": "string" },
+        "style_ref": { "type": "string" }
+      },
+      "required": ["menu_zone", "order", "zone", "component", "style_ref"]
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "component_ref": { "type": "string" },
+          "label": { "type": "string" },
+          "placeholder": { "type": "string" },
+          "default_value": { "type": "string" },
+          "min": { "type": "number" },
+          "max": { "type": "number" },
+          "validation": { "type": "string" }
+        },
+        "required": ["component_ref", "label"]
+      }
+    }
+  },
+  "required": ["ui_title", "ui_type", "ui_layout", "arguments"]
+}
+```
+
+---
+
+## 8. Arquitectura del Cliente en Go
+
+El núcleo del motor en Go se estructura bajo el patrón de diseño **Intérprete Reactivo**.
+
+### Modelo de Datos del Motor
+
+```go
+package core
+
+type EstiloToken struct {
+	ColorFondo   string `json:"color_fondo"`
+	ColorTexto   string `json:"color_texto"`
+	BorderRadius string `json:"border_radius"` -- sharp, smooth, rounded
+	FontSize     string `json:"font_size"`     -- small, medium, large
+	FontWeight   string `json:"font_weight"`   -- light, normal, bold
+}
+
+type ControlMeta struct {
+	ComponentRef string  `json:"component_ref"`
+	Label        string  `json:"label"`
+	Placeholder  string  `json:"placeholder"`
+	DefaultValue string  `json:"default_value"`
+	Min          float64 `json:"min"`
+	Max          float64 `json:"max"`
+	Validation   string  `json:"validation"` // Reglas de validación a nivel de cliente (Ej: "required|min:1")
+}
+
+type LayoutMeta struct {
+	MenuZone  string `json:"menu_zone"`
+	Order     int    `json:"order"`
+	Zone      string `json:"zone"`
+	Component string `json:"component"`
+	StyleRef  string `json:"style_ref"`
+}
+
+type PantallaMeta struct {
+	UITitle   string                 `json:"ui_title"`
+	UIType    string                 `json:"ui_type"`
+	UILayout  LayoutMeta             `json:"ui_layout"`
+	Arguments map[string]ControlMeta `json:"arguments"`
+}
+
+type AppContext struct {
+	DesignSystem     map[string]EstiloToken
+	MenuScreens      []map[string]interface{}
+	ActiveScreen     PantallaMeta
+	ControlInstances map[string]interface{}
+	ScreenCache      map[string]PantallaMeta // Caché de pantallas invalidada por LISTEN/NOTIFY
+	DBConnection     DatabaseConnection      
+}
+```
+
+### Renderizado con Fallback Seguro y Validación Local
+
+Para mitigar fallas críticas si la base de datos define componentes de UI avanzados o no soportados por la versión actual del binario de Go, el pipeline de renderizado implementa un fallback seguro en tiempo de ejecución.
+
+```go
+func (app *AppContext) RenderizarComponente(meta ControlMeta, argName string) interface{} {
+	// 1. Validar soporte nativo del widget
+	if !app.IsComponentSupported(meta.ComponentRef) {
+		log.Printf("[WARNING] Componente '%s' no soportado por este cliente. Renderizando alternativa segura.", meta.ComponentRef)
+		
+		// Fallback Seguro: Se dibuja un input deshabilitado con aviso descriptivo
+		return app.WidgetFactory.CreateWarningPlaceholder(
+			fmt.Sprintf("Componente '%s' no disponible en esta versión de GolemUI. Valor actual: %s", meta.ComponentRef, meta.DefaultValue),
+		)
+	}
+
+	// 2. Renderizado normal del widget
+	return app.WidgetFactory.BuildWidget(meta.ComponentRef, meta)
+}
+
+func (app *AppContext) EjecutarTransaccion(funcionNombre string) {
+	// Ejecutar validaciones declarativas locales en Go antes de enviar datos a la red
+	for argName, meta := range app.ActiveScreen.Arguments {
+		valor := app.ExtraerValorWidget(argName)
+		if err := app.ValidarEntradaLocal(meta.Validation, valor); err != nil {
+			app.MostrarAlertaDeValidacion(meta.Label, err.Error())
+			return // Detiene la transacción sin tocar la red
+		}
+	}
+	
+	// Envío sanitizado y parametrizado por RPC
+	app.DBConnection.ExecuteRPC(funcionNombre, app.ConstruirParametros())
+}
+```
+
+---
+
+## 9. Bootstrap Efímero de Lua
+
+Lua actúa únicamente como un intermediario ágil para cargar las credenciales y ejecutar la consulta inicial del motor.
+
+### Driver: `golemui_driver.lua`
+
+```lua
+local GolemUIDriver = {}
+
+GolemUIDriver.host     = "127.0.0.1"
+GolemUIDriver.port     = 5432
+GolemUIDriver.database = "golemui_production"
+GolemUIDriver.user = "golemui_render_engine"
+GolemUIDriver.password = "a98dfb0f98cd233e7f8d664ab1a"
+
+GolemUIDriver.entry_point_query = [[
+    SELECT
+        (SELECT golemui.obtener_inicializacion_motor()) AS motor_config,
+        (SELECT golemui.obtener_menu_sistema()) AS menu
+]]
+
+return GolemUIDriver
+```
+
+### Control de VM en Go
+Para evitar fugas de memoria, la máquina virtual de Lua se cierra y recolecta inmediatamente después de procesar la tabla de configuración.
+
+```go
+func InicializarBootstrap(path string) (*ConfigConexion, error) {
+	L := lua.NewState()
+	// Cierre preventivo e inmediato al salir del scope del bootstrap
+	defer L.Close()
+
+	if err := L.DoFile(path); err != nil {
+		return nil, err
+	}
+
+	tbl, ok := L.Get(-1).(*lua.LTable)
+	if !ok {
+		return nil, errors.New("formato de driver de configuración inválido")
+	}
+
+	return &ConfigConexion{
+		Host:            tbl.RawGetString("host").String(),
+		Port:            int(tbl.RawGetString("port").(lua.LNumber)),
+		Database:        tbl.RawGetString("database").String(),
+		User:            tbl.RawGetString("user").String(),
+		Password:        tbl.RawGetString("password").String(),
+		EntryPointQuery: tbl.RawGetString("entry_point_query").String(),
+	}, nil
+}
+```
+
+---
+
+## 10. Herramientas y Validaciones en Tiempo de Desarrollo
+
+Para eliminar la resistencia de los desarrolladores al escribir estructuras JSON complejas dentro de sentencias SQL `COMMENT ON`, se integra la herramienta CLI `golemui`.
+
+```bash
+# Validar estructura y correspondencia de argumentos antes de aplicar migraciones
+golemui validate-comments --file ./migrations/20260604_clinica_medica.sql
+```
+
+Esta herramienta analiza:
+- Validez sintáctica del JSON.
+- Mapeo de argumentos contra la firma del Stored Procedure de Postgres.
+- Existencia de referencias a tokens de estilo en `golemui.estilos`.
+
+---
+
+## Apéndice A: Mapeo de Orígenes de Datos Heterogéneos
+
+Aunque el motor GolemUI requiere de manera mandatoria una base de datos PostgreSQL local para almacenar el catálogo de diseño y el esquema de sistema (`golemui.*`), el dominio de negocio de la aplicación final puede consultar o enviar datos transaccionales a motores externos (como Microsoft SQL Server, MySQL) o servicios web (APIs REST a través de peticiones HTTP POST).
+
+Se definen dos estrategias arquitectónicas para integrar estas fuentes de datos de manera limpia y sin alterar el esquema central de GolemUI.
+
+### Estrategia 1: Integración Nativa vía Foreign Data Wrappers (FDW) (Recomendado - Cliente Ciego)
+
+Esta estrategia mantiene al cliente de Go completamente libre de librerías y conectores de otros fabricantes. PostgreSQL actúa como el **concentrador e integrador de datos de la red**.
+
+```mermaid
+graph LR
+    A[Cliente GolemUI Go] -->|Queries / RPC Estándar| B[PostgreSQL Central]
+    B -->|tds_fdw| C[(MS SQL Server)]
+    B -->|http_fdw / pg_net| D[Web Service API]
+```
+
+#### Caso de Uso A: Mapear una grilla de datos en MS SQL Server
+Se utiliza la extensión `tds_fdw` en PostgreSQL para mapear el catálogo externo como si fuesen tablas locales.
+
+```sql
+-- 1. Instalar la extensión en Postgres
+CREATE EXTENSION IF NOT EXISTS tds_fdw;
+
+-- 2. Registrar el servidor MS SQL remoto
+CREATE SERVER mssql_servidor
+FOREIGN DATA WRAPPER tds_fdw
+OPTIONS (servername '192.168.1.100', port '1433', database 'negocio_db');
+
+-- 3. Crear el mapeo de usuarios
+CREATE USER MAPPING FOR golemui_render_engine
+SERVER mssql_servidor
+OPTIONS (username 'usuario_externo', password 'clave_secreta');
+
+-- 4. Crear la tabla extranjera en un esquema local
+CREATE FOREIGN TABLE public.mssql_clientes (
+    id INT,
+    nombre VARCHAR(100),
+    saldo NUMERIC(10,2)
+) SERVER mssql_servidor OPTIONS (table_name 'dbo.Clientes');
+
+-- 5. Crear la vista mapeada en GolemUI
+INSERT INTO golemui.vistas_consulta (id, titulo, origen_datos, config_columnas, config_filtros)
+VALUES (
+    'consulta_clientes_externos', 
+    'Clientes Remotos (MS SQL)', 
+    'public.mssql_clientes', -- Postgres resuelve el FDW de forma transparente
+    '{"id": "ID", "nombre": "Nombre Completo", "saldo": "Balance"}'::jsonb,
+    '{"nombre": "text"}'::jsonb
+);
+```
+
+#### Caso de Uso B: Transaccionar hacia una API REST externa por POST
+Para llamadas RPC de tipo botón de acción que deben invocar un endpoint HTTP externo, Postgres realiza el llamado de red por debajo de manera asíncrona o síncrona.
+
+```sql
+CREATE OR REPLACE FUNCTION public.pos_enviar_notificacion_externa(
+    p_titulo VARCHAR,
+    p_cuerpo VARCHAR
+) RETURNS VOID AS $$
+DECLARE
+    v_url VARCHAR := 'https://api.serviciomedico.local/v1/alertas';
+    v_payload JSONB;
+    v_status INT;
+BEGIN
+    v_payload := json_build_object('title', p_titulo, 'body', p_cuerpo);
+    
+    -- Utilizando la extensión estándar pg_net o pgsql-http
+    SELECT status INTO v_status 
+    FROM http_post(v_url, v_payload::text, 'application/json');
+    
+    IF v_status NOT BETWEEN 200 AND 299 THEN
+        RAISE EXCEPTION 'ERROR DE COMUNICACION CON API DE ALERTAS (HTTP STATUS: %)', v_status;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+---
+
+### Estrategia 2: Proveedores de Datos en Go (Enfoque de Cliente Gateway)
+
+Si las políticas de infraestructura de red impiden que PostgreSQL abra conexiones directas hacia el exterior (debido a firewalls corporativos o restricciones de DBAs), el cliente en Go puede asumir el rol de **resolutor de orígenes de datos**.
+
+Para ello, se extiende el esquema `golemui` con un catálogo de proveedores de datos:
+
+```sql
+CREATE TABLE golemui.proveedores_datos (
+    id VARCHAR(50) PRIMARY KEY, -- Ej: 'api_pacientes', 'mssql_facturacion'
+    tipo VARCHAR(20) NOT NULL,  -- 'postgres', 'mssql', 'rest_api'
+    config_conexion JSONB NOT NULL -- Credenciales, URL Base, Cabeceras HTTP
+);
+```
+
+#### Ajustes de Metadata en Consultas
+Las tablas de metadatos apuntan al proveedor correspondiente:
+
+```sql
+ALTER TABLE golemui.vistas_consulta ADD COLUMN proveedor_id VARCHAR(50) REFERENCES golemui.proveedores_datos(id);
+```
+
+#### Implementación del Adaptador en Go
+El cliente Go, en lugar de consultar directamente Postgres para la extracción de datos de la grilla, evalúa el proveedor de la pantalla activa:
+
+```go
+func (app *AppContext) CargarDatosPantalla(vistaId string, filtros map[string]interface{}) ([]byte, error) {
+	// 1. Consultar la definición de la vista y su proveedor en Postgres
+	vista, proveedor := app.ObtenerDefinicionVista(vistaId)
+
+	// 2. Resolver según el tipo de proveedor de datos
+	switch proveedor.Tipo {
+	case "postgres":
+		// Consulta local usando pgx
+		return app.EjecutarQueryLocal(vista.OrigenDatos, filtros)
+		
+	case "mssql":
+		// El cliente Go abre un pool temporal a MS SQL y ejecuta el Query
+		connStr := app.ConstruirConnStrMSSQL(proveedor.ConfigConexion)
+		return app.EjecutarQueryMSSQL(connStr, vista.OrigenDatos, filtros)
+		
+	case "rest_api":
+		// El cliente Go realiza un POST HTTP directo a la API con los filtros en el Body
+		urlBase := proveedor.ConfigConexion["url_base"].(string)
+		endpoint := vista.OrigenDatos // Ej: "/v1/pacientes/search"
+		return app.ConsumirApiRestPOST(urlBase + endpoint, filtros)
+	}
+	
+	return nil, fmt.Errorf("proveedor de datos '%s' no soportado", proveedor.Tipo)
+}
+```
+*Nota: Las credenciales del proveedor (`config_conexion`) se almacenan de forma encriptada en la base de datos y el cliente de Go las descifra al inicio mediante una clave simétrica compartida.*
