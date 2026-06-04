@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  golemui-db:
+    image: postgres:15-alpine
+    container_name: golemui-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=golemui_core
+      - POSTGRES_USER=golemui_core_engine
+      - POSTGRES_PASSWORD=secret_password_for_ui
+    volumes:
+      - ./docker/init-db:/docker-entrypoint-initdb.d
+      - ./data:/data
