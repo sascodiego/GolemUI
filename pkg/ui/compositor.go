@@ -295,6 +295,9 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		model.rows = dataRows
 		model.mu.Unlock()
 
+		for i := 0; i < len(headers); i++ {
+			table.SetColumnWidth(i, 150)
+		}
 		table.Refresh()
 	}()
 }
@@ -452,6 +455,9 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		model.rows = dataRows
 		model.mu.Unlock()
 
+		for i := 0; i < len(headers); i++ {
+			table.SetColumnWidth(i, 150)
+		}
 		table.Refresh()
 	}()
 }
