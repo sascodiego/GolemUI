@@ -3,8 +3,25 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// DBQuerier abstracts standard SQL query execution methods from pgx.
+type DBQuerier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
+// DatabasePool extends DBQuerier with pool lifecycle and health-check methods.
+type DatabasePool interface {
+	DBQuerier
+	Ping(ctx context.Context) error
+	Close()
+}
 
 type Config struct {
 	Host     string
@@ -15,8 +32,8 @@ type Config struct {
 }
 
 type DB struct {
-	CorePool     *pgxpool.Pool
-	BusinessPool *pgxpool.Pool
+	CorePool     DatabasePool
+	BusinessPool DatabasePool
 }
 
 func InitDB(ctx context.Context, coreCfg Config, bizCfg Config) (*DB, error) {

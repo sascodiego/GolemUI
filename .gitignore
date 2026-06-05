@@ -11,3 +11,8 @@ coverage.out
 # IDEs
 .idea/
 .vscode/
+
+# Sessions and temp files
+*.session
+last.session
+
