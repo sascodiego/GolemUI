@@ -1,9 +1,6 @@
-# Specification: Parametrized Grid Filtering (parametrized-grid-filtering)
+# Delta for Parametrized Grid Filtering (parametrized-grid-filtering)
 
-## Introduction
-The `parametrized-grid-filtering` capability enables dynamic, reactive filtering of data grids (`widget.Table`) in GolemUI. Grids subscribe to the consolidated SUBMIT event channel, cancel stale queries, execute parametrized SQL queries with native placeholders (`$1`), and safely update the UI on the main thread.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Grid subscribes to SUBMIT channel with positional args
 

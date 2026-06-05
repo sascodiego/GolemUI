@@ -184,3 +184,59 @@ func TestLoadScreen_NilPoolErrorMessage(t *testing.T) {
 		t.Errorf("expected error message %q, got %q", expected, err.Error())
 	}
 }
+
+func TestNodeMeta_FilterMode_DefaultEmpty(t *testing.T) {
+	raw := `{"area":"g","component_ref":"data_grid","data_source":"SELECT 1"}`
+	var node ui.NodeMeta
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if node.FilterMode != "" {
+		t.Errorf("expected FilterMode to default to empty string, got %q", node.FilterMode)
+	}
+}
+
+func TestNodeMeta_FilterMode_Server(t *testing.T) {
+	raw := `{"area":"g","component_ref":"data_grid","data_source":"SELECT 1","filter_mode":"server"}`
+	var node ui.NodeMeta
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if node.FilterMode != "server" {
+		t.Errorf("expected FilterMode = 'server', got %q", node.FilterMode)
+	}
+}
+
+func TestNodeMeta_FilterMode_Client(t *testing.T) {
+	raw := `{"area":"g","component_ref":"data_grid","data_source":"SELECT 1","filter_mode":"client"}`
+	var node ui.NodeMeta
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if node.FilterMode != "client" {
+		t.Errorf("expected FilterMode = 'client', got %q", node.FilterMode)
+	}
+}
+
+func TestNodeMeta_MasterDataSource(t *testing.T) {
+	raw := `{"area":"g","component_ref":"data_grid","data_source":"SELECT 1","filter_mode":"client","master_data_source":"SELECT * FROM master"}`
+	var node ui.NodeMeta
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if node.MasterDataSource != "SELECT * FROM master" {
+		t.Errorf("expected MasterDataSource = 'SELECT * FROM master', got %q", node.MasterDataSource)
+	}
+}
+
+func TestNodeMeta_MasterDataSource_DefaultEmpty(t *testing.T) {
+	raw := `{"area":"g","component_ref":"data_grid","data_source":"SELECT 1"}`
+	var node ui.NodeMeta
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if node.MasterDataSource != "" {
+		t.Errorf("expected MasterDataSource to default to empty string, got %q", node.MasterDataSource)
+	}
+}
+

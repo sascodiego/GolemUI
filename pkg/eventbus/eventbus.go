@@ -5,6 +5,10 @@ import (
 	"sync"
 )
 
+// SubmitChannelPrefix is the prefix for scoped submit channels.
+// Actual channels are: "screen:submit:<vistaID>"
+const SubmitChannelPrefix = "screen:submit"
+
 type Event struct {
 	Channel string
 	Payload interface{}

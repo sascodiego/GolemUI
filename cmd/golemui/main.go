@@ -70,7 +70,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 		return nil, fmt.Errorf("failed to load screen %q: %w", vistaID, err)
 	}
 
-	homeUI, err := ui.Compose(homeNode)
+	homeUI, err := ui.Compose(homeNode, vistaID)
 	if err != nil {
 		dbPool.Close()
 		return nil, fmt.Errorf("failed to compose home UI: %w", err)

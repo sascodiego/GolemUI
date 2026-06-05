@@ -19,12 +19,15 @@ var CorePool     db.DatabasePool
 var LocalEventBus eventbus.EventBus
 
 type dataGridModel struct {
-	mu          sync.RWMutex
-	headers     []string
-	columns     []string
-	rows        [][]string
-	cancel      context.CancelFunc
-	unsubscribe func()
+	mu            sync.RWMutex
+	headers       []string
+	columns       []string
+	rows          [][]string
+	masterHeaders []string
+	masterRows    [][]string
+	filterKeys    []string
+	cancel        context.CancelFunc
+	unsubscribe   func()
 }
 
 type LayoutMeta struct {
@@ -35,27 +38,37 @@ type LayoutMeta struct {
 }
 
 type NodeMeta struct {
-	Area         string     `json:"area"`
-	ComponentRef string     `json:"component_ref"`
-	Label        string     `json:"label,omitempty"`
-	Placeholder  string     `json:"placeholder,omitempty"`
-	DefaultValue string     `json:"default_value,omitempty"`
-	Min          float64    `json:"min,omitempty"`
-	Max          float64    `json:"max,omitempty"`
-	Validation   string     `json:"validation,omitempty"`
-	DataSource   string     `json:"data_source,omitempty"`
-	SubmitAction string     `json:"submit_action,omitempty"`
-	BindTo       string     `json:"bind_to,omitempty"`
-	Layout       LayoutMeta `json:"layout,omitempty"`
-	Children     []NodeMeta `json:"children,omitempty"`
+	Area             string     `json:"area"`
+	ComponentRef     string     `json:"component_ref"`
+	Label            string     `json:"label,omitempty"`
+	Placeholder      string     `json:"placeholder,omitempty"`
+	DefaultValue     string     `json:"default_value,omitempty"`
+	Min              float64    `json:"min,omitempty"`
+	Max              float64    `json:"max,omitempty"`
+	Validation       string     `json:"validation,omitempty"`
+	DataSource       string     `json:"data_source,omitempty"`
+	SubmitAction     string     `json:"submit_action,omitempty"`
+	BindTo           string     `json:"bind_to,omitempty"`
+	FilterMode       string     `json:"filter_mode,omitempty"`
+	MasterDataSource string     `json:"master_data_source,omitempty"`
+	FilterKeys       []string   `json:"filter_keys,omitempty"`
+	Layout           LayoutMeta `json:"layout,omitempty"`
+	Children         []NodeMeta `json:"children,omitempty"`
 }
 
-func Compose(node NodeMeta) (fyne.CanvasObject, error) {
+// Compose creates a per-screen ScreenState scoped to vistaID and delegates to composeWithState.
+func Compose(node NodeMeta, vistaID string) (fyne.CanvasObject, error) {
+	state := NewScreenState(vistaID)
+	return composeWithState(node, state)
+}
+
+// composeWithState recursively builds Fyne widgets, threading *ScreenState through all children.
+func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, error) {
 	switch node.ComponentRef {
 	case "container":
 		var objects []fyne.CanvasObject
 		for _, child := range node.Children {
-			cObj, err := Compose(child)
+			cObj, err := composeWithState(child, state)
 			if err != nil {
 				return nil, err
 			}
@@ -91,18 +104,25 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 		entry := widget.NewEntry()
 		entry.PlaceHolder = node.Placeholder
 		entry.SetText(node.DefaultValue)
-		if node.BindTo != "" && LocalEventBus != nil {
+		if node.BindTo != "" {
 			entry.OnChanged = func(text string) {
-				LocalEventBus.Publish(node.BindTo, text)
+				state.Set(node.BindTo, text)
 			}
 		}
 		return entry, nil
 
 	case "button":
+		if node.SubmitAction != "" && LocalEventBus != nil {
+			return widget.NewButton(node.Label, func() {
+				LocalEventBus.Publish(state.SubmitChannel(), state.Snapshot())
+			}), nil
+		}
 		return widget.NewButton(node.Label, func() {}), nil
 
 	case "data_grid":
-		model := &dataGridModel{}
+		model := &dataGridModel{
+			filterKeys: node.FilterKeys,
+		}
 		table := widget.NewTableWithHeaders(
 			func() (int, int) {
 				model.mu.RLock()
@@ -146,23 +166,48 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 		model.cancel = cancel
 		model.mu.Unlock()
 
-		fetchGridDataAsync(ctx, node, model, table)
+		// Client-mode: eagerly load master buffer
+		if node.FilterMode == "client" && node.MasterDataSource != "" {
+			loadMasterBuffer(ctx, node, model, table)
+		} else if node.DataSource != "" {
+			// Default / server-mode: load initial data using initial state parameters
+			args := extractOrderedArgs(state.Snapshot(), node.FilterKeys)
+			fetchGridDataAsync(ctx, node, model, table, args...)
+		}
 
-		if node.BindTo != "" && LocalEventBus != nil {
-			subID := LocalEventBus.Subscribe(node.BindTo, func(ev eventbus.Event) {
-				model.mu.Lock()
-				if model.cancel != nil {
-					model.cancel()
+		// Subscribe to scoped SubmitChannel for reactivity
+		if LocalEventBus != nil {
+			subID := LocalEventBus.Subscribe(state.SubmitChannel(), func(ev eventbus.Event) {
+				snap, ok := ev.Payload.(map[string]any)
+				if !ok {
+					return
 				}
-				subCtx, subCancel := context.WithCancel(context.Background())
-				model.cancel = subCancel
-				model.mu.Unlock()
 
-				fetchGridDataAsync(subCtx, node, model, table, ev.Payload)
+				if node.FilterMode == "client" {
+					// Client-side filtering: filter masterRows in memory
+					filterMasterRows(model, table, snap)
+				} else {
+					// Server-side filtering: parameterized query
+					if len(node.FilterKeys) == 0 {
+						log.Printf("Warning: server-mode data_grid at area %q requires filter_keys but none defined; skipping SUBMIT", node.Area)
+						return
+					}
+
+					model.mu.Lock()
+					if model.cancel != nil {
+						model.cancel()
+					}
+					subCtx, subCancel := context.WithCancel(context.Background())
+					model.cancel = subCancel
+					model.mu.Unlock()
+
+					args := extractOrderedArgs(snap, node.FilterKeys)
+					fetchGridDataAsync(subCtx, node, model, table, args...)
+				}
 			})
 			model.mu.Lock()
 			model.unsubscribe = func() {
-				LocalEventBus.Unsubscribe(node.BindTo, subID)
+				LocalEventBus.Unsubscribe(state.SubmitChannel(), subID)
 			}
 			model.mu.Unlock()
 		}
@@ -174,6 +219,187 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 		fallback := widget.NewLabel(fmt.Sprintf("[Fallback: Unrecognized component type %q]", node.ComponentRef))
 		return fallback, nil
 	}
+}
+
+// extractOrderedArgs maps snapshot keys to positional args ($1, $2, ...) in FilterKeys order.
+// Missing keys default to empty string (so LIKE '' matches everything instead of NULL = false).
+// Returns empty slice when filterKeys is empty — no alphabetical fallback.
+func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
+	if len(filterKeys) == 0 {
+		return []any{}
+	}
+	args := make([]any, 0, len(filterKeys))
+	for _, key := range filterKeys {
+		val, exists := snap[key]
+		if !exists {
+			args = append(args, "")
+		} else {
+			args = append(args, val)
+		}
+	}
+	return args
+}
+
+// loadMasterBuffer eagerly loads all data from MasterDataSource into the model's masterRows.
+func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table) {
+	if BusinessPool == nil {
+		log.Printf("Warning: BusinessPool is nil; cannot load master buffer for data_grid at area %q", node.Area)
+		return
+	}
+	go func() {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		rows, err := BusinessPool.Query(ctx, node.MasterDataSource)
+		if err != nil {
+			log.Printf("Error loading master buffer %q: %v", node.MasterDataSource, err)
+			return
+		}
+		defer rows.Close()
+
+		fds := rows.FieldDescriptions()
+		var headers []string
+		for _, fd := range fds {
+			headers = append(headers, fd.Name)
+		}
+
+		var dataRows [][]string
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			vals, err := rows.Values()
+			if err != nil {
+				log.Printf("Error scanning master row values: %v", err)
+				break
+			}
+			var stringRow []string
+			for _, val := range vals {
+				if val == nil {
+					stringRow = append(stringRow, "")
+				} else {
+					stringRow = append(stringRow, fmt.Sprintf("%v", val))
+				}
+			}
+			dataRows = append(dataRows, stringRow)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
+		model.mu.Lock()
+		model.masterHeaders = headers
+		model.masterRows = dataRows
+		model.headers = headers
+		model.rows = dataRows
+		model.mu.Unlock()
+
+		fyne.Do(func() {
+			table.Refresh()
+		})
+	}()
+}
+
+// filterMasterRows applies client-side filtering on the master buffer.
+// A row matches if ALL snapshot values appear as substrings in the corresponding columns.
+func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string]any) {
+	model.mu.Lock()
+
+	if len(model.masterRows) == 0 {
+		model.mu.Unlock()
+		return
+	}
+
+	// Build column index from master headers
+	colIndex := make(map[string]int)
+	for i, h := range model.masterHeaders {
+		colIndex[h] = i
+	}
+
+	// If snapshot is empty, show all rows
+	if len(snap) == 0 {
+		model.rows = model.masterRows
+		model.mu.Unlock()
+		fyne.Do(func() {
+			table.Refresh()
+		})
+		return
+	}
+
+	var filtered [][]string
+	for _, row := range model.masterRows {
+		match := true
+		for key, val := range snap {
+			col, ok := colIndex[key]
+			if !ok {
+				log.Printf("Warning: client-mode filter key %q not found in grid columns %v; skipping", key, model.masterHeaders)
+				continue // key not in grid columns — skip
+			}
+			if col >= len(row) {
+				match = false
+				break
+			}
+			cellVal := row[col]
+			searchStr := fmt.Sprintf("%v", val)
+			if searchStr == "" {
+				continue // empty filter matches all
+			}
+			// Substring match
+			if !containsIgnoreCase(cellVal, searchStr) {
+				match = false
+				break
+			}
+		}
+		if match {
+			filtered = append(filtered, row)
+		}
+	}
+
+	model.rows = filtered
+	model.mu.Unlock()
+
+	fyne.Do(func() {
+		table.Refresh()
+	})
+}
+
+// containsIgnoreCase checks if substr is contained in s, case-insensitive.
+func containsIgnoreCase(s, substr string) bool {
+	sl := len(s)
+	subl := len(substr)
+	if subl == 0 {
+		return true
+	}
+	if subl > sl {
+		return false
+	}
+	for i := 0; i <= sl-subl; i++ {
+		if caseInsensitiveEqual(s[i:i+subl], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func caseInsensitiveEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ca := a[i]
+		cb := b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 32
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 32
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }
 
 func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table, args ...any) {

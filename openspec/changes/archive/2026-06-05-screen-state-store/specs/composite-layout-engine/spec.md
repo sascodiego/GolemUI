@@ -1,18 +1,6 @@
-# Specification: Composite Layout Engine (composite-layout-engine)
+# Delta for Composite Layout Engine (composite-layout-engine)
 
-## Introduction
-The `composite-layout-engine` is GolemUI's recursive layout rendering component. It runs on the client (Capa 4) using Fyne and is responsible for parsing a dynamic nested JSON schema (`composite_screen`), which represents the visual hierarchy, layout rules (such as rows, columns, fractional widths, or grids), and instantiating equivalent Fyne layout containers and widgets.
-
-## Requirements
-1. The engine MUST parse a nested JSON schema mapping (`composite_screen`) containing screen node definitions.
-2. The engine MUST support recursive layout trees, where node containers can contain other nested node containers.
-3. The engine MUST parse and support layout properties:
-   - Grid layout configuration with row/column metric specifications (e.g. `"2fr, 1fr"`).
-   - Flex layouts (horizontal and vertical).
-   - Tab containers.
-4. The engine MUST map leaf nodes to their corresponding logical UI widgets (e.g., text inputs, buttons, tables).
-5. If a node is malformed or invalid in JSON, the engine MUST fail gracefully, fall back to a placeholder component, and log the syntax or validation warning.
-6. The engine MUST construct the layout dynamically at runtime without requiring client recompilation.
+## MODIFIED Requirements
 
 ### Requirement: Compose receives and threads ScreenState
 

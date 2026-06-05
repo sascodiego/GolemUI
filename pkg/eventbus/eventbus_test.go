@@ -168,3 +168,9 @@ func TestEventBus_Concurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestSubmitChannelPrefix_Constant(t *testing.T) {
+	if SubmitChannelPrefix != "screen:submit" {
+		t.Errorf("expected SubmitChannelPrefix = %q, got %q", "screen:submit", SubmitChannelPrefix)
+	}
+}

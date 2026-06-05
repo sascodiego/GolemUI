@@ -73,9 +73,16 @@ CREATE TABLE IF NOT EXISTS golemui.vistas_consulta (
 
 INSERT INTO golemui.vistas_consulta (id, titulo, origen_datos, config_columnas, config_filtros)
 VALUES ('home', 'Home', 'SELECT 1',
-  '{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}'::jsonb,
+  '{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"},{"area":"search_title","component_ref":"text_input","bind_to":"title","placeholder":"Filter by title"},{"area":"search_author","component_ref":"text_input","bind_to":"author","placeholder":"Filter by author"},{"area":"submit_btn","component_ref":"button","label":"Search","submit_action":"search"},{"area":"grid_area","component_ref":"data_grid","data_source":"SELECT * FROM transacciones WHERE descripcion LIKE $1 AND monto::text LIKE $2","filter_mode":"server","filter_keys":["title","author"]}]}'::jsonb,
   '[]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO golemui.vistas_consulta (id, titulo, origen_datos, config_columnas, config_filtros)
+VALUES ('transacciones_list', 'Listado de Transacciones', 'SELECT id, emp_cod, monto, status FROM public.transacciones WHERE emp_cod LIKE $1 AND status LIKE $2',
+  '{"area":"root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Listado de Transacciones"},{"area":"filters_container","component_ref":"container","layout":{"type":"horizontal"},"children":[{"area":"emp_cod_filter","component_ref":"text_input","placeholder":"Filtrar por Empresa (LIKE)","bind_to":"emp_cod"},{"area":"status_filter","component_ref":"text_input","placeholder":"Filtrar por Status (LIKE)","bind_to":"status"},{"area":"search_button","component_ref":"button","label":"Actualizar","submit_action":"search"}]},{"area":"transactions_grid","component_ref":"data_grid","filter_mode":"server","data_source":"SELECT id, emp_cod, monto, status FROM public.transacciones WHERE emp_cod LIKE $1 AND status LIKE $2","filter_keys":["emp_cod","status"]}]}'::jsonb,
+  '[]'::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
 
 -- Vistas personalizadas guardadas por los usuarios
 CREATE TABLE IF NOT EXISTS golemui.vistas_guardadas (

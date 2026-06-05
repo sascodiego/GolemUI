@@ -1,9 +1,6 @@
-# Specification: Reactive Input Publishing (reactive-input-publishing)
+# Delta for Reactive Input Publishing (reactive-input-publishing)
 
-## Introduction
-The `reactive-input-publishing` capability specifies how user input events in GolemUI text fields are captured and published. When a user modifies the text, the UI compositor intercepts the changes and writes them into the per-screen `ScreenState` store. A separate submit button consolidates and publishes the full state snapshot via the event bus.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Input writes to ScreenState instead of publishing directly
 
