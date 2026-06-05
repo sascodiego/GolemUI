@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS golemui.vistas_consulta (
     config_filtros JSONB NOT NULL
 );
 
+INSERT INTO golemui.vistas_consulta (id, titulo, origen_datos, config_columnas, config_filtros)
+VALUES ('home', 'Home', 'SELECT 1',
+  '{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}'::jsonb,
+  '[]'::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
 -- Vistas personalizadas guardadas por los usuarios
 CREATE TABLE IF NOT EXISTS golemui.vistas_guardadas (
     id SERIAL PRIMARY KEY,

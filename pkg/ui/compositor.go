@@ -15,6 +15,7 @@ import (
 )
 
 var BusinessPool db.DatabasePool
+var CorePool     db.DatabasePool
 var LocalEventBus eventbus.EventBus
 
 type dataGridModel struct {

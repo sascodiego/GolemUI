@@ -162,6 +162,12 @@ func TestBusinessPoolExists(t *testing.T) {
 	}
 }
 
+func TestCorePool_DefaultsNil(t *testing.T) {
+	if ui.CorePool != nil {
+		t.Errorf("expected CorePool to be nil at package init, got %v", ui.CorePool)
+	}
+}
+
 func TestCompose_DataGrid_Success(t *testing.T) {
 	mockPool := db.NewMockDBPool()
 	
