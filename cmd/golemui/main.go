@@ -58,6 +58,12 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 
+	// 3.5. Initialize Fyne app & Window
+	if fyneApp == nil {
+		fyneApp = app.New()
+	}
+	win := fyneApp.NewWindow("GolemUI Client")
+
 	// 4. Load home screen from core database (pkg/ui)
 	vistaID := cfg.EntryPointViewID
 	if vistaID == "" {
@@ -76,11 +82,6 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 		return nil, fmt.Errorf("failed to compose home UI: %w", err)
 	}
 
-	// 5. Initialize Fyne app & Window
-	if fyneApp == nil {
-		fyneApp = app.New()
-	}
-	win := fyneApp.NewWindow("GolemUI Client")
 	win.SetContent(homeUI)
 
 	a := &App{
