@@ -1,13 +1,17 @@
 package ui_test
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+	"github.com/jackc/pgx/v5"
 	"GolemUI/pkg/db"
+	"GolemUI/pkg/eventbus"
 	"GolemUI/pkg/ui"
 )
 
@@ -280,6 +284,144 @@ func TestCompose_DataGrid_NilPool(t *testing.T) {
 	rows, cols := table.Length()
 	if rows != 0 || cols != 0 {
 		t.Errorf("expected 0x0 table when BusinessPool is nil, got %dx%d", rows, cols)
+	}
+}
+
+type queryCall struct {
+	ctx  context.Context
+	sql  string
+	args []any
+}
+
+type trackingMockDBPool struct {
+	*db.MockDBPool
+	mu            sync.Mutex
+	queriesCalled []queryCall
+}
+
+func (t *trackingMockDBPool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	t.mu.Lock()
+	t.queriesCalled = append(t.queriesCalled, queryCall{ctx: ctx, sql: sql, args: args})
+	t.mu.Unlock()
+	return t.MockDBPool.Query(ctx, sql, args...)
+}
+
+func TestCompose_DataGrid_ReactiveFiltering(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	mockPool := db.NewMockDBPool()
+	trackingPool := &trackingMockDBPool{MockDBPool: mockPool}
+	ui.BusinessPool = trackingPool
+	defer func() { ui.BusinessPool = nil }()
+
+	cols := []string{"id", "title"}
+	rowsData := [][]any{
+		{1, "Book A"},
+	}
+	mockPool.RegisterQuery("SELECT * FROM books WHERE title LIKE $1", cols, rowsData, nil)
+
+	inputNode := ui.NodeMeta{
+		Area:         "input_area",
+		ComponentRef: "text_input",
+		BindTo:       "filter_channel",
+		Placeholder:  "Filter books",
+	}
+
+	gridNode := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		BindTo:       "filter_channel",
+		DataSource:   "SELECT * FROM books WHERE title LIKE $1",
+	}
+
+	inputObj, err := ui.Compose(inputNode)
+	if err != nil {
+		t.Fatalf("failed to compose text_input: %v", err)
+	}
+	entry, ok := inputObj.(*widget.Entry)
+	if !ok {
+		t.Fatalf("expected *widget.Entry, got %T", inputObj)
+	}
+
+	gridObj, err := ui.Compose(gridNode)
+	if err != nil {
+		t.Fatalf("failed to compose data_grid: %v", err)
+	}
+	table, ok := gridObj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", gridObj)
+	}
+	if table == nil {
+		t.Fatal("expected non-nil *widget.Table")
+	}
+
+	// Type into the entry. This should trigger publishers and subscriber queries
+	test.Type(entry, "Book A")
+
+	// Wait for query to execute with the typed text
+	var foundCall bool
+	var lastCall queryCall
+	for start := time.Now(); time.Since(start) < 1000*time.Millisecond; {
+		trackingPool.mu.Lock()
+		calls := trackingPool.queriesCalled
+		trackingPool.mu.Unlock()
+		for _, call := range calls {
+			if len(call.args) > 0 && call.args[0] == "Book A" {
+				foundCall = true
+				lastCall = call
+				break
+			}
+		}
+		if foundCall {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !foundCall {
+		t.Fatal("expected query to be executed with parameter 'Book A'")
+	}
+
+	// Verify the context was NOT cancelled for the successful final call
+	if lastCall.ctx.Err() != nil {
+		t.Error("expected successful query context not to be cancelled, but it was")
+	}
+
+	// Now verify rapid typing cancels previous context
+	trackingPool.mu.Lock()
+	trackingPool.queriesCalled = nil
+	trackingPool.mu.Unlock()
+
+	// Type rapidly
+	test.Type(entry, "B")
+	test.Type(entry, "C")
+	test.Type(entry, "D")
+
+	// Wait a bit to ensure queries were registered/triggered
+	time.Sleep(200 * time.Millisecond)
+
+	trackingPool.mu.Lock()
+	callsAfter := trackingPool.queriesCalled
+	trackingPool.mu.Unlock()
+
+	// We expect multiple queries, and at least the earlier ones should have cancelled contexts
+	if len(callsAfter) < 2 {
+		t.Fatalf("expected at least 2 queries triggered during rapid typing, got %d", len(callsAfter))
+	}
+
+	// Verify that early queries have their context cancelled
+	var cancelledCount int
+	for i := 0; i < len(callsAfter)-1; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if callsAfter[i].ctx.Err() != nil {
+			cancelledCount++
+		}
+	}
+
+	if cancelledCount == 0 {
+		t.Error("expected at least one early query to be cancelled, got 0")
 	}
 }
 
