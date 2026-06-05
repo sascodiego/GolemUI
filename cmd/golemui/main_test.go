@@ -10,6 +10,7 @@ import (
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2/test"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestRunBootstrap_MissingConfig(t *testing.T) {
@@ -87,12 +88,24 @@ func TestRunBootstrap_Success(t *testing.T) {
 	defer func() {
 		initDB = oldInitDB
 		ui.BusinessPool = nil
+		ui.CorePool = nil
 	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	// Register vista query so LoadScreen can load the home screen from DB
+	coreMock.RegisterQuery(
+		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		[]string{"config_columnas"},
+		[][]any{{`{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}`}},
+		nil,
+	)
 
 	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
 		return &db.DB{
-			CorePool:     db.NewMockDBPool(),
-			BusinessPool: db.NewMockDBPool(),
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
 		}, nil
 	}
 
@@ -112,7 +125,8 @@ golemui_driver = {
         User = "postgres",
         Password = "password"
     },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1",
+    EntryPointViewID = "home"
 }
 `
 	tmpDir := t.TempDir()
@@ -144,6 +158,149 @@ golemui_driver = {
 
 	if ui.BusinessPool != appInstance.DB.BusinessPool {
 		t.Errorf("expected ui.BusinessPool to match DB.BusinessPool, got %v, want %v", ui.BusinessPool, appInstance.DB.BusinessPool)
+	}
+
+	// Verify ui.CorePool is wired to the core database pool
+	if ui.CorePool != coreMock {
+		t.Error("expected ui.CorePool to be wired to the core mock pool")
+	}
+}
+
+func TestRunBootstrap_DefaultVistaID(t *testing.T) {
+	// Verifies that when EntryPointViewID is absent from config, it defaults to "home"
+	oldInitDB := initDB
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+		ui.CorePool = nil
+	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	// Register vista query for default "home" vista (no EntryPointViewID in config)
+	coreMock.RegisterQuery(
+		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		[]string{"config_columnas"},
+		[][]any{{`{"area":"default_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"title","component_ref":"label","label":"Default Home"}]}`}},
+		nil,
+	)
+
+	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
+		return &db.DB{
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
+		}, nil
+	}
+
+	// Config WITHOUT EntryPointViewID — should default to "home"
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password"
+    },
+    BusinessDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "negocio_production",
+        User = "postgres",
+        Password = "password"
+    },
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_default_vista.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	if err != nil {
+		t.Fatalf("expected bootstrap to succeed with default vistaID 'home', got error: %v", err)
+	}
+
+	if appInstance == nil {
+		t.Fatal("expected app instance, got nil")
+	}
+
+	if ui.CorePool != coreMock {
+		t.Error("expected ui.CorePool to be wired to the core mock pool")
+	}
+}
+
+func TestRunBootstrap_LoadScreenFailure(t *testing.T) {
+	oldInitDB := initDB
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+		ui.CorePool = nil
+	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	// Register vista query to return ErrNoRows — simulates missing vista
+	coreMock.RegisterQuery(
+		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		[]string{"config_columnas"},
+		nil,
+		pgx.ErrNoRows,
+	)
+
+	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
+		return &db.DB{
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
+		}, nil
+	}
+
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password"
+    },
+    BusinessDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "negocio_production",
+        User = "postgres",
+        Password = "password"
+    },
+    EntryPointViewID = "nonexistent"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_failure.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	if err == nil {
+		t.Fatal("expected error when LoadScreen fails, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "LoadScreen") {
+		t.Errorf("expected error to mention LoadScreen, got: %v", err)
+	}
+
+	if appInstance != nil {
+		t.Error("expected nil app instance on LoadScreen failure")
 	}
 }
 
