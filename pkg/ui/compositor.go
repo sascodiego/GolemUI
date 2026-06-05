@@ -11,15 +11,19 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 	"GolemUI/pkg/db"
+	"GolemUI/pkg/eventbus"
 )
 
 var BusinessPool db.DatabasePool
+var LocalEventBus eventbus.EventBus
 
 type dataGridModel struct {
-	mu      sync.RWMutex
-	headers []string
-	columns []string
-	rows    [][]string
+	mu          sync.RWMutex
+	headers     []string
+	columns     []string
+	rows        [][]string
+	cancel      context.CancelFunc
+	unsubscribe func()
 }
 
 type LayoutMeta struct {
@@ -86,6 +90,11 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 		entry := widget.NewEntry()
 		entry.PlaceHolder = node.Placeholder
 		entry.SetText(node.DefaultValue)
+		if node.BindTo != "" && LocalEventBus != nil {
+			entry.OnChanged = func(text string) {
+				LocalEventBus.Publish(node.BindTo, text)
+			}
+		}
 		return entry, nil
 
 	case "button":
@@ -131,7 +140,31 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 			}
 		}
 
-		fetchGridDataAsync(node, model, table)
+		model.mu.Lock()
+		ctx, cancel := context.WithCancel(context.Background())
+		model.cancel = cancel
+		model.mu.Unlock()
+
+		fetchGridDataAsync(ctx, node, model, table)
+
+		if node.BindTo != "" && LocalEventBus != nil {
+			subID := LocalEventBus.Subscribe(node.BindTo, func(ev eventbus.Event) {
+				model.mu.Lock()
+				if model.cancel != nil {
+					model.cancel()
+				}
+				subCtx, subCancel := context.WithCancel(context.Background())
+				model.cancel = subCancel
+				model.mu.Unlock()
+
+				fetchGridDataAsync(subCtx, node, model, table, ev.Payload)
+			})
+			model.mu.Lock()
+			model.unsubscribe = func() {
+				LocalEventBus.Unsubscribe(node.BindTo, subID)
+			}
+			model.mu.Unlock()
+		}
 
 		return table, nil
 
@@ -142,7 +175,7 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 	}
 }
 
-func fetchGridDataAsync(node NodeMeta, model *dataGridModel, table *widget.Table) {
+func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table, args ...any) {
 	if node.DataSource == "" {
 		return
 	}
@@ -151,8 +184,10 @@ func fetchGridDataAsync(node NodeMeta, model *dataGridModel, table *widget.Table
 			log.Printf("Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
 			return
 		}
-		ctx := context.Background()
-		rows, err := BusinessPool.Query(ctx, node.DataSource)
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		rows, err := BusinessPool.Query(ctx, node.DataSource, args...)
 		if err != nil {
 			log.Printf("Error running data_grid query %q: %v", node.DataSource, err)
 			return
@@ -167,6 +202,9 @@ func fetchGridDataAsync(node NodeMeta, model *dataGridModel, table *widget.Table
 
 		var dataRows [][]string
 		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return
+			}
 			vals, err := rows.Values()
 			if err != nil {
 				log.Printf("Error scanning row values: %v", err)
@@ -181,6 +219,10 @@ func fetchGridDataAsync(node NodeMeta, model *dataGridModel, table *widget.Table
 				}
 			}
 			dataRows = append(dataRows, stringRow)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return
 		}
 
 		model.mu.Lock()
