@@ -2,9 +2,11 @@ package ui
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -17,6 +19,7 @@ import (
 var BusinessPool db.DatabasePool
 var CorePool     db.DatabasePool
 var LocalEventBus eventbus.EventBus
+var Navigate func(vistaID string)
 
 type dataGridModel struct {
 	mu            sync.RWMutex
@@ -111,7 +114,24 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 		}
 		return entry, nil
 
+	case "text_area":
+		entry := widget.NewMultiLineEntry()
+		entry.PlaceHolder = node.Placeholder
+		entry.SetText(node.DefaultValue)
+		if node.BindTo != "" {
+			entry.OnChanged = func(text string) {
+				state.Set(node.BindTo, text)
+			}
+		}
+		return entry, nil
+
 	case "button":
+		if strings.HasPrefix(node.SubmitAction, "navigate:") && Navigate != nil {
+			targetVista := strings.TrimPrefix(node.SubmitAction, "navigate:")
+			return widget.NewButton(node.Label, func() {
+				Navigate(targetVista)
+			}), nil
+		}
 		if node.SubmitAction != "" && LocalEventBus != nil {
 			return widget.NewButton(node.Label, func() {
 				LocalEventBus.Publish(state.SubmitChannel(), state.Snapshot())
@@ -130,34 +150,47 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 				return len(model.rows), len(model.headers)
 			},
 			func() fyne.CanvasObject {
-				return widget.NewLabel("")
+				lbl := widget.NewLabel("")
+				lbl.Truncation = fyne.TextTruncateClip
+				return lbl
 			},
 			func(id widget.TableCellID, cell fyne.CanvasObject) {
 				model.mu.RLock()
 				defer model.mu.RUnlock()
+				label, ok := cell.(*widget.Label)
+				if !ok {
+					return
+				}
 				if id.Row < 0 || id.Row >= len(model.rows) || id.Col < 0 || id.Col >= len(model.headers) {
+					label.SetText("")
 					return
 				}
 				row := model.rows[id.Row]
 				if id.Col < len(row) {
-					if label, ok := cell.(*widget.Label); ok {
-						label.SetText(row[id.Col])
-					}
+					label.SetText(row[id.Col])
+				} else {
+					label.SetText("")
 				}
 			},
 		)
 
 		table.CreateHeader = func() fyne.CanvasObject {
-			return widget.NewLabel("")
+			lbl := widget.NewLabel("")
+			lbl.Truncation = fyne.TextTruncateClip
+			return lbl
 		}
 
 		table.UpdateHeader = func(id widget.TableCellID, cell fyne.CanvasObject) {
 			model.mu.RLock()
 			defer model.mu.RUnlock()
+			label, ok := cell.(*widget.Label)
+			if !ok {
+				return
+			}
 			if id.Col >= 0 && id.Col < len(model.headers) {
-				if label, ok := cell.(*widget.Label); ok {
-					label.SetText(model.headers[id.Col])
-				}
+				label.SetText(model.headers[id.Col])
+			} else {
+				label.SetText("")
 			}
 		}
 
@@ -171,8 +204,10 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 			loadMasterBuffer(ctx, node, model, table)
 		} else if node.DataSource != "" {
 			// Default / server-mode: load initial data using initial state parameters
-			args := extractOrderedArgs(state.Snapshot(), node.FilterKeys)
-			fetchGridDataAsync(ctx, node, model, table, args...)
+			if !strings.HasPrefix(node.DataSource, "state:") {
+				args := extractOrderedArgs(state.Snapshot(), node.FilterKeys)
+				fetchGridDataAsync(ctx, node, model, table, node.DataSource, args...)
+			}
 		}
 
 		// Subscribe to scoped SubmitChannel for reactivity
@@ -190,10 +225,23 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 					// Client-side filtering: filter masterRows in memory
 					filterMasterRows(model, table, snap)
 				} else {
-					// Server-side filtering: parameterized query
-					if len(node.FilterKeys) == 0 {
-						log.Printf("[UI/DataGrid] Warning: server-mode data_grid at area %q requires filter_keys but none defined; skipping SUBMIT", node.Area)
-						return
+					// Server-side filtering
+					query := node.DataSource
+					var args []any
+					if strings.HasPrefix(query, "state:") {
+						stateKey := strings.TrimPrefix(query, "state:")
+						qVal, exists := snap[stateKey]
+						if !exists || qVal == "" {
+							log.Printf("[UI/DataGrid] Dynamic query key %q is empty; skipping query", stateKey)
+							return
+						}
+						query = fmt.Sprintf("%v", qVal)
+					} else {
+						if len(node.FilterKeys) == 0 {
+							log.Printf("[UI/DataGrid] Warning: server-mode data_grid at area %q requires filter_keys but none defined; skipping SUBMIT", node.Area)
+							return
+						}
+						args = extractOrderedArgs(snap, node.FilterKeys)
 					}
 
 					model.mu.Lock()
@@ -204,8 +252,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 					model.cancel = subCancel
 					model.mu.Unlock()
 
-					args := extractOrderedArgs(snap, node.FilterKeys)
-					fetchGridDataAsync(subCtx, node, model, table, args...)
+					fetchGridDataAsync(subCtx, node, model, table, query, args...)
 				}
 			})
 			model.mu.Lock()
@@ -228,6 +275,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 // Missing keys default to empty string (so LIKE '' matches everything instead of NULL = false).
 // Returns empty slice when filterKeys is empty — no alphabetical fallback.
 func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
+	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs called with filterKeys: %+v (len: %d)", filterKeys, len(filterKeys))
 	if len(filterKeys) == 0 {
 		return []any{}
 	}
@@ -240,6 +288,7 @@ func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
 			args = append(args, val)
 		}
 	}
+	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs returning args: %+v (len: %d)", args, len(args))
 	return args
 }
 
@@ -281,11 +330,7 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 			}
 			var stringRow []string
 			for _, val := range vals {
-				if val == nil {
-					stringRow = append(stringRow, "")
-				} else {
-					stringRow = append(stringRow, fmt.Sprintf("%v", val))
-				}
+				stringRow = append(stringRow, formatValue(val))
 			}
 			dataRows = append(dataRows, stringRow)
 		}
@@ -408,11 +453,11 @@ func caseInsensitiveEqual(a, b string) bool {
 	return true
 }
 
-func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table, args ...any) {
-	if node.DataSource == "" {
+func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table, query string, args ...any) {
+	if query == "" {
 		return
 	}
-	log.Printf("[UI/DataGrid] Requesting data async for area %q. SQL: %q, Args: %+v", node.Area, node.DataSource, args)
+	log.Printf("[UI/DataGrid] Requesting data async for area %q. SQL: %q, Args: %+v", node.Area, query, args)
 	go func() {
 		if BusinessPool == nil {
 			log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
@@ -422,9 +467,9 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 			log.Printf("[UI/DataGrid] Query cancelled before start for area %q", node.Area)
 			return
 		}
-		rows, err := BusinessPool.Query(ctx, node.DataSource, args...)
+		rows, err := BusinessPool.Query(ctx, query, args...)
 		if err != nil {
-			log.Printf("[UI/DataGrid] Error running query %q: %v", node.DataSource, err)
+			log.Printf("[UI/DataGrid] Error running query %q: %v", query, err)
 			return
 		}
 		defer rows.Close()
@@ -448,11 +493,7 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 			}
 			var stringRow []string
 			for _, val := range vals {
-				if val == nil {
-					stringRow = append(stringRow, "")
-				} else {
-					stringRow = append(stringRow, fmt.Sprintf("%v", val))
-				}
+				stringRow = append(stringRow, formatValue(val))
 			}
 			dataRows = append(dataRows, stringRow)
 		}
@@ -476,3 +517,22 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		table.Refresh()
 	}()
 }
+
+func formatValue(val any) string {
+	if val == nil {
+		return ""
+	}
+	if valuer, ok := val.(driver.Valuer); ok {
+		v, err := valuer.Value()
+		if err == nil && v != nil {
+			switch ts := v.(type) {
+			case []byte:
+				return string(ts)
+			default:
+				return fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	return fmt.Sprintf("%v", val)
+}
+

@@ -1138,3 +1138,68 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 	}
 }
 
+func TestCompose_TextArea(t *testing.T) {
+	node := ui.NodeMeta{
+		Area:         "query_input",
+		ComponentRef: "text_area",
+		Placeholder:  "Write SQL here",
+		DefaultValue: "SELECT 1",
+	}
+
+	obj, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	entry, ok := obj.(*widget.Entry)
+	if !ok {
+		t.Fatalf("expected *widget.Entry for text_area, got %T", obj)
+	}
+
+	if !entry.MultiLine {
+		t.Error("expected entry to be MultiLine for text_area component")
+	}
+
+	if entry.PlaceHolder != "Write SQL here" {
+		t.Errorf("expected placeholder 'Write SQL here', got %q", entry.PlaceHolder)
+	}
+
+	if entry.Text != "SELECT 1" {
+		t.Errorf("expected text 'SELECT 1', got %q", entry.Text)
+	}
+}
+
+func TestCompose_ButtonNavigation(t *testing.T) {
+	var navigatedTo string
+	ui.Navigate = func(vistaID string) {
+		navigatedTo = vistaID
+	}
+	defer func() {
+		ui.Navigate = nil
+	}()
+
+	node := ui.NodeMeta{
+		Area:         "nav_button",
+		ComponentRef: "button",
+		Label:        "Go to query runner",
+		SubmitAction: "navigate:query_runner",
+	}
+
+	obj, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	btn, ok := obj.(*widget.Button)
+	if !ok {
+		t.Fatalf("expected *widget.Button, got %T", obj)
+	}
+
+	test.Tap(btn)
+
+	if navigatedTo != "query_runner" {
+		t.Errorf("expected Navigate to be called with 'query_runner', got %q", navigatedTo)
+	}
+}
+
+

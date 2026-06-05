@@ -68,3 +68,12 @@ EOSQL
 else
     echo "ADVERTENCIA: No se encontró el archivo /data/transactions.json para la ingesta de prueba."
 fi
+
+# 3. Otorgar permisos al usuario de renderizado (golemui_render_engine) sobre las tablas de negocio
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "negocio_production" <<-EOSQL
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO golemui_render_engine;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO golemui_render_engine;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO golemui_render_engine;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO golemui_render_engine;
+EOSQL
+

@@ -64,6 +64,22 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	}
 	win := fyneApp.NewWindow("GolemUI Client")
 
+	// Setup navigation callback
+	ui.Navigate = func(vID string) {
+		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
+		node, err := ui.LoadScreen(ctx, ui.CorePool, vID)
+		if err != nil {
+			log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
+			return
+		}
+		newUI, err := ui.Compose(node, vID)
+		if err != nil {
+			log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
+			return
+		}
+		win.SetContent(newUI)
+	}
+
 	// 4. Load home screen from core database (pkg/ui)
 	vistaID := cfg.EntryPointViewID
 	if vistaID == "" {
