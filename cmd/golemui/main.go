@@ -51,6 +51,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
+	ui.BusinessPool = dbPool.BusinessPool
 
 	// 3. Event bus setup (pkg/eventbus)
 	eb := eventbus.NewEventBus()

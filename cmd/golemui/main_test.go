@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"GolemUI/pkg/db"
+	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2/test"
 )
 
@@ -83,7 +84,10 @@ some_other_driver = {
 func TestRunBootstrap_Success(t *testing.T) {
 	// Reemplazar initDB por una función mock que retorna un mock db pool
 	oldInitDB := initDB
-	defer func() { initDB = oldInitDB }()
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+	}()
 
 	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
 		return &db.DB{
@@ -136,6 +140,10 @@ golemui_driver = {
 	// Verificar que el pool sea el mock
 	if _, ok := appInstance.DB.CorePool.(*db.MockDBPool); !ok {
 		t.Error("expected CorePool to be MockDBPool")
+	}
+
+	if ui.BusinessPool != appInstance.DB.BusinessPool {
+		t.Errorf("expected ui.BusinessPool to match DB.BusinessPool, got %v, want %v", ui.BusinessPool, appInstance.DB.BusinessPool)
 	}
 }
 

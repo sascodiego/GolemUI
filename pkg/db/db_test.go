@@ -184,4 +184,50 @@ func TestMockDBPool_Concurrency(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMockRowsFieldDescriptions(t *testing.T) {
+	ctx := context.Background()
+
+	// Case 1: normal columns
+	t.Run("NormalColumns", func(t *testing.T) {
+		pool := db.NewMockDBPool()
+		cols := []string{"id", "title", "amount"}
+		pool.RegisterQuery("SELECT id, title, amount FROM items", cols, [][]any{{1, "Book", 12.5}}, nil)
+
+		rows, err := pool.Query(ctx, "SELECT id, title, amount FROM items")
+		if err != nil {
+			t.Fatalf("Query failed: %v", err)
+		}
+		defer rows.Close()
+
+		fds := rows.FieldDescriptions()
+		if len(fds) != len(cols) {
+			t.Fatalf("expected %d field descriptions, got %d", len(cols), len(fds))
+		}
+
+		for i, fd := range fds {
+			if fd.Name != cols[i] {
+				t.Errorf("expected field %d to have name %q, got %q", i, cols[i], fd.Name)
+			}
+		}
+	})
+
+	// Case 2: empty columns (edge case)
+	t.Run("EmptyColumns", func(t *testing.T) {
+		pool := db.NewMockDBPool()
+		pool.RegisterQuery("SELECT 1", nil, nil, nil)
+
+		rows, err := pool.Query(ctx, "SELECT 1")
+		if err != nil {
+			t.Fatalf("Query failed: %v", err)
+		}
+		defer rows.Close()
+
+		fds := rows.FieldDescriptions()
+		if len(fds) != 0 {
+			t.Errorf("expected 0 field descriptions, got %d", len(fds))
+		}
+	})
+}
+
+
 

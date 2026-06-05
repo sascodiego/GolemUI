@@ -2,10 +2,12 @@ package ui_test
 
 import (
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+	"GolemUI/pkg/db"
 	"GolemUI/pkg/ui"
 )
 
@@ -147,3 +149,138 @@ func TestCompose_GridAndButton(t *testing.T) {
 		t.Errorf("expected button text 'Submit', got %q", btn.Text)
 	}
 }
+
+func TestBusinessPoolExists(t *testing.T) {
+	// Reference ui.BusinessPool, which doesn't exist yet, to trigger a compile-time failure.
+	var pool interface{} = ui.BusinessPool
+	if pool != nil {
+		t.Log("BusinessPool is not nil")
+	}
+}
+
+func TestCompose_DataGrid_Success(t *testing.T) {
+	mockPool := db.NewMockDBPool()
+	
+	// Register mock query
+	cols := []string{"id", "title", "amount"}
+	rowsData := [][]any{
+		{1, "Book A", 25.5},
+		{2, "Book B", 35.0},
+	}
+	mockPool.RegisterQuery("SELECT * FROM books", cols, rowsData, nil)
+	
+	// Inject the mock pool
+	ui.BusinessPool = mockPool
+	defer func() { ui.BusinessPool = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT * FROM books",
+	}
+
+	obj, err := ui.Compose(node)
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected composed object to be *widget.Table, got %T", obj)
+	}
+
+	// Poll/wait for async loading to complete (up to 500ms)
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, colsCount := table.Length()
+		if rows == 2 && colsCount == 3 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !loaded {
+		t.Fatal("timeout waiting for data_grid to load data async")
+	}
+
+	// Assert headers
+	header0 := table.CreateHeader()
+	table.UpdateHeader(widget.TableCellID{Row: -1, Col: 0}, header0)
+	lbl0 := header0.(*widget.Label)
+	if lbl0.Text != "id" {
+		t.Errorf("expected header 0 to be 'id', got %q", lbl0.Text)
+	}
+
+	header1 := table.CreateHeader()
+	table.UpdateHeader(widget.TableCellID{Row: -1, Col: 1}, header1)
+	lbl1 := header1.(*widget.Label)
+	if lbl1.Text != "title" {
+		t.Errorf("expected header 1 to be 'title', got %q", lbl1.Text)
+	}
+
+	// Assert cell content
+	cell := table.CreateCell()
+	table.UpdateCell(widget.TableCellID{Row: 0, Col: 1}, cell)
+	lblCell := cell.(*widget.Label)
+	if lblCell.Text != "Book A" {
+		t.Errorf("expected cell (0,1) text 'Book A', got %q", lblCell.Text)
+	}
+
+	table.UpdateCell(widget.TableCellID{Row: 1, Col: 2}, cell)
+	lblCell2 := cell.(*widget.Label)
+	if lblCell2.Text != "35" && lblCell2.Text != "35.0" && lblCell2.Text != "35%" {
+		t.Errorf("expected cell (1,2) text to represent 35, got %q", lblCell2.Text)
+	}
+}
+
+func TestCompose_DataGrid_NoDataSource(t *testing.T) {
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "",
+	}
+
+	obj, err := ui.Compose(node)
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected composed object to be *widget.Table, got %T", obj)
+	}
+
+	rows, cols := table.Length()
+	if rows != 0 || cols != 0 {
+		t.Errorf("expected 0x0 table when DataSource is empty, got %dx%d", rows, cols)
+	}
+}
+
+func TestCompose_DataGrid_NilPool(t *testing.T) {
+	ui.BusinessPool = nil
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT 1",
+	}
+
+	// This should not crash / panic
+	obj, err := ui.Compose(node)
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected composed object to be *widget.Table, got %T", obj)
+	}
+
+	rows, cols := table.Length()
+	if rows != 0 || cols != 0 {
+		t.Errorf("expected 0x0 table when BusinessPool is nil, got %dx%d", rows, cols)
+	}
+}
+
+

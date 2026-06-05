@@ -1,14 +1,26 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
+	"GolemUI/pkg/db"
 )
+
+var BusinessPool db.DatabasePool
+
+type dataGridModel struct {
+	mu      sync.RWMutex
+	headers []string
+	columns []string
+	rows    [][]string
+}
 
 type LayoutMeta struct {
 	Type    string   `json:"type"`
@@ -79,9 +91,106 @@ func Compose(node NodeMeta) (fyne.CanvasObject, error) {
 	case "button":
 		return widget.NewButton(node.Label, func() {}), nil
 
+	case "data_grid":
+		model := &dataGridModel{}
+		table := widget.NewTableWithHeaders(
+			func() (int, int) {
+				model.mu.RLock()
+				defer model.mu.RUnlock()
+				return len(model.rows), len(model.headers)
+			},
+			func() fyne.CanvasObject {
+				return widget.NewLabel("")
+			},
+			func(id widget.TableCellID, cell fyne.CanvasObject) {
+				model.mu.RLock()
+				defer model.mu.RUnlock()
+				if id.Row < 0 || id.Row >= len(model.rows) || id.Col < 0 || id.Col >= len(model.headers) {
+					return
+				}
+				row := model.rows[id.Row]
+				if id.Col < len(row) {
+					if label, ok := cell.(*widget.Label); ok {
+						label.SetText(row[id.Col])
+					}
+				}
+			},
+		)
+
+		table.CreateHeader = func() fyne.CanvasObject {
+			return widget.NewLabel("")
+		}
+
+		table.UpdateHeader = func(id widget.TableCellID, cell fyne.CanvasObject) {
+			model.mu.RLock()
+			defer model.mu.RUnlock()
+			if id.Col >= 0 && id.Col < len(model.headers) {
+				if label, ok := cell.(*widget.Label); ok {
+					label.SetText(model.headers[id.Col])
+				}
+			}
+		}
+
+		fetchGridDataAsync(node, model, table)
+
+		return table, nil
+
 	default:
 		log.Printf("Warning: Unrecognized component type %q at area %q", node.ComponentRef, node.Area)
 		fallback := widget.NewLabel(fmt.Sprintf("[Fallback: Unrecognized component type %q]", node.ComponentRef))
 		return fallback, nil
 	}
+}
+
+func fetchGridDataAsync(node NodeMeta, model *dataGridModel, table *widget.Table) {
+	if node.DataSource == "" {
+		return
+	}
+	go func() {
+		if BusinessPool == nil {
+			log.Printf("Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
+			return
+		}
+		ctx := context.Background()
+		rows, err := BusinessPool.Query(ctx, node.DataSource)
+		if err != nil {
+			log.Printf("Error running data_grid query %q: %v", node.DataSource, err)
+			return
+		}
+		defer rows.Close()
+
+		fds := rows.FieldDescriptions()
+		var headers []string
+		for _, fd := range fds {
+			headers = append(headers, fd.Name)
+		}
+
+		var dataRows [][]string
+		for rows.Next() {
+			vals, err := rows.Values()
+			if err != nil {
+				log.Printf("Error scanning row values: %v", err)
+				break
+			}
+			var stringRow []string
+			for _, val := range vals {
+				if val == nil {
+					stringRow = append(stringRow, "")
+				} else {
+					stringRow = append(stringRow, fmt.Sprintf("%v", val))
+				}
+			}
+			dataRows = append(dataRows, stringRow)
+		}
+
+		model.mu.Lock()
+		model.headers = headers
+		model.columns = headers
+		model.rows = dataRows
+		model.mu.Unlock()
+
+		fyne.Do(func() {
+			table.Refresh()
+		})
+	}()
 }

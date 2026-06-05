@@ -180,8 +180,17 @@ func (m *MockRows) CommandTag() pgconn.CommandTag {
 }
 
 func (m *MockRows) FieldDescriptions() []pgconn.FieldDescription {
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]pgconn.FieldDescription, len(m.columns))
+	for i, col := range m.columns {
+		res[i] = pgconn.FieldDescription{
+			Name: col,
+		}
+	}
+	return res
 }
+
 
 func (m *MockRows) Next() bool {
 	m.mu.Lock()
