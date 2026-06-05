@@ -1,0 +1,31 @@
+schema: spec-driven
+
+context: |
+  Project: GolemUI
+  Stack: Go (go1.26.4), PostgreSQL, Fyne, Lua.
+  Architecture: Segregated persistence, 4-layer decoupling, composite layouts.
+  Testing: go test, fyne/test, golangci-lint, gofmt, go vet.
+  Style: Conventional commits, production-first, ephemeral DB.
+
+rules:
+  proposal:
+    - Include rollback plan for database schema changes or plugin migrations.
+    - Explicitly separate UI concerns (Capa 4) from business data concerns (Capa 1).
+  specs:
+    - Define data flow across the 4-layer decoupling architecture.
+    - Follow GolemUI catalog and override rules (Capa 2 and 3).
+  design:
+    - Include SQL schema definition for any new UI catalog components or styles.
+    - Document composite screen structure in JSON format.
+  tasks:
+    - Group database scripts (Capa 2/3) and Fyne Go client changes (Capa 4) into separate tasks.
+    - Ensure ephemeral init scripts in docker/init-db/ are updated production-first.
+  apply:
+    tdd: true
+    test_command: "go test ./..."
+  verify:
+    test_command: "go test ./..."
+    build_command: "go build ./..."
+    coverage_threshold: 80
+  archive:
+    - Ensure new SQL schemas are integrated into docker/init-db/ scripts.
