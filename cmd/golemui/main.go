@@ -52,25 +52,22 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 	ui.BusinessPool = dbPool.BusinessPool
+	ui.CorePool = dbPool.CorePool
 
 	// 3. Event bus setup (pkg/eventbus)
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 
-	// 4. Composition of the home screen layout (pkg/ui)
-	homeNode := ui.NodeMeta{
-		Area:         "home_root",
-		ComponentRef: "container",
-		Layout: ui.LayoutMeta{
-			Type: "vertical",
-		},
-		Children: []ui.NodeMeta{
-			{
-				Area:         "header",
-				ComponentRef: "label",
-				Label:        "Welcome to GolemUI Desktop Client",
-			},
-		},
+	// 4. Load home screen from core database (pkg/ui)
+	vistaID := cfg.EntryPointViewID
+	if vistaID == "" {
+		vistaID = "home"
+	}
+
+	homeNode, err := ui.LoadScreen(ctx, ui.CorePool, vistaID)
+	if err != nil {
+		dbPool.Close()
+		return nil, fmt.Errorf("failed to load screen %q: %w", vistaID, err)
 	}
 
 	homeUI, err := ui.Compose(homeNode)
