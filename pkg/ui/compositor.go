@@ -177,11 +177,14 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 
 		// Subscribe to scoped SubmitChannel for reactivity
 		if LocalEventBus != nil {
+			log.Printf("[UI/DataGrid] Subscribing data_grid at area %q to channel %q", node.Area, state.SubmitChannel())
 			subID := LocalEventBus.Subscribe(state.SubmitChannel(), func(ev eventbus.Event) {
 				snap, ok := ev.Payload.(map[string]any)
 				if !ok {
+					log.Printf("[UI/DataGrid] Warning: payload on channel %q is not map[string]any", state.SubmitChannel())
 					return
 				}
+				log.Printf("[UI/DataGrid] Reacting to submit channel %q. Filter snapshot: %+v", state.SubmitChannel(), snap)
 
 				if node.FilterMode == "client" {
 					// Client-side filtering: filter masterRows in memory
@@ -189,7 +192,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 				} else {
 					// Server-side filtering: parameterized query
 					if len(node.FilterKeys) == 0 {
-						log.Printf("Warning: server-mode data_grid at area %q requires filter_keys but none defined; skipping SUBMIT", node.Area)
+						log.Printf("[UI/DataGrid] Warning: server-mode data_grid at area %q requires filter_keys but none defined; skipping SUBMIT", node.Area)
 						return
 					}
 
@@ -243,16 +246,18 @@ func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
 // loadMasterBuffer eagerly loads all data from MasterDataSource into the model's masterRows.
 func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table) {
 	if BusinessPool == nil {
-		log.Printf("Warning: BusinessPool is nil; cannot load master buffer for data_grid at area %q", node.Area)
+		log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot load master buffer for data_grid at area %q", node.Area)
 		return
 	}
+	log.Printf("[UI/DataGrid] Requesting master buffer eagerly for area %q. SQL: %q", node.Area, node.MasterDataSource)
 	go func() {
 		if err := ctx.Err(); err != nil {
+			log.Printf("[UI/DataGrid] Master buffer load cancelled before start for area %q", node.Area)
 			return
 		}
 		rows, err := BusinessPool.Query(ctx, node.MasterDataSource)
 		if err != nil {
-			log.Printf("Error loading master buffer %q: %v", node.MasterDataSource, err)
+			log.Printf("[UI/DataGrid] Error loading master buffer %q: %v", node.MasterDataSource, err)
 			return
 		}
 		defer rows.Close()
@@ -266,11 +271,12 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		var dataRows [][]string
 		for rows.Next() {
 			if err := ctx.Err(); err != nil {
+				log.Printf("[UI/DataGrid] Master buffer load cancelled during row scan for area %q", node.Area)
 				return
 			}
 			vals, err := rows.Values()
 			if err != nil {
-				log.Printf("Error scanning master row values: %v", err)
+				log.Printf("[UI/DataGrid] Error scanning master row values: %v", err)
 				break
 			}
 			var stringRow []string
@@ -285,8 +291,11 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		}
 
 		if err := ctx.Err(); err != nil {
+			log.Printf("[UI/DataGrid] Master buffer load cancelled before model write for area %q", node.Area)
 			return
 		}
+
+		log.Printf("[UI/DataGrid] Master buffer execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(headers), len(dataRows))
 
 		model.mu.Lock()
 		model.masterHeaders = headers
@@ -403,17 +412,19 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 	if node.DataSource == "" {
 		return
 	}
+	log.Printf("[UI/DataGrid] Requesting data async for area %q. SQL: %q, Args: %+v", node.Area, node.DataSource, args)
 	go func() {
 		if BusinessPool == nil {
-			log.Printf("Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
+			log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
 			return
 		}
 		if err := ctx.Err(); err != nil {
+			log.Printf("[UI/DataGrid] Query cancelled before start for area %q", node.Area)
 			return
 		}
 		rows, err := BusinessPool.Query(ctx, node.DataSource, args...)
 		if err != nil {
-			log.Printf("Error running data_grid query %q: %v", node.DataSource, err)
+			log.Printf("[UI/DataGrid] Error running query %q: %v", node.DataSource, err)
 			return
 		}
 		defer rows.Close()
@@ -427,11 +438,12 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		var dataRows [][]string
 		for rows.Next() {
 			if err := ctx.Err(); err != nil {
+				log.Printf("[UI/DataGrid] Query cancelled during row scan for area %q", node.Area)
 				return
 			}
 			vals, err := rows.Values()
 			if err != nil {
-				log.Printf("Error scanning row values: %v", err)
+				log.Printf("[UI/DataGrid] Error scanning row values: %v", err)
 				break
 			}
 			var stringRow []string
@@ -446,8 +458,11 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		}
 
 		if err := ctx.Err(); err != nil {
+			log.Printf("[UI/DataGrid] Query cancelled before model write for area %q", node.Area)
 			return
 		}
+
+		log.Printf("[UI/DataGrid] Query execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(headers), len(dataRows))
 
 		model.mu.Lock()
 		model.headers = headers
