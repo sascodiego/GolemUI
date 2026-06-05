@@ -55,6 +55,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 
 	// 3. Event bus setup (pkg/eventbus)
 	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
 
 	// 4. Composition of the home screen layout (pkg/ui)
 	homeNode := ui.NodeMeta{
