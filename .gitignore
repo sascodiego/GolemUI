@@ -1,0 +1,13 @@
+# Binaries
+golemui
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+coverage.out
+
+# IDEs
+.idea/
+.vscode/
