@@ -13,6 +13,90 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func TestSanitizeLocale_LangC(t *testing.T) {
+	t.Setenv("LANG", "C")
+	t.Setenv("LC_ALL", "")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "en_US.UTF-8" {
+		t.Errorf("expected LANG to be %q, got %q", "en_US.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "" {
+		t.Errorf("expected LC_ALL to remain empty, got %q", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_LCAllPOSIX(t *testing.T) {
+	t.Setenv("LANG", "")
+	t.Setenv("LC_ALL", "POSIX")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "en_US.UTF-8" {
+		t.Errorf("expected LANG to be %q, got %q", "en_US.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "en_US.UTF-8" {
+		t.Errorf("expected LC_ALL to be %q, got %q", "en_US.UTF-8", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_BothEmpty(t *testing.T) {
+	t.Setenv("LANG", "")
+	t.Setenv("LC_ALL", "")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "en_US.UTF-8" {
+		t.Errorf("expected LANG to be %q, got %q", "en_US.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "" {
+		t.Errorf("expected LC_ALL to remain empty, got %q", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_ValidLangUntouched(t *testing.T) {
+	t.Setenv("LANG", "es_AR.UTF-8")
+	t.Setenv("LC_ALL", "")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "es_AR.UTF-8" {
+		t.Errorf("expected LANG to remain %q, got %q", "es_AR.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "" {
+		t.Errorf("expected LC_ALL to remain empty, got %q", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_LCAllValid(t *testing.T) {
+	t.Setenv("LANG", "")
+	t.Setenv("LC_ALL", "en_US.UTF-8")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "en_US.UTF-8" {
+		t.Errorf("expected LANG to be set to %q since it was empty, got %q", "en_US.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "en_US.UTF-8" {
+		t.Errorf("expected LC_ALL to remain %q, got %q", "en_US.UTF-8", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_LCAllCOverridesValidLang(t *testing.T) {
+	t.Setenv("LANG", "es_AR.UTF-8")
+	t.Setenv("LC_ALL", "C")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "es_AR.UTF-8" {
+		t.Errorf("expected LANG to remain %q, got %q", "es_AR.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "en_US.UTF-8" {
+		t.Errorf("expected LC_ALL to be %q, got %q", "en_US.UTF-8", os.Getenv("LC_ALL"))
+	}
+}
+
+func TestSanitizeLocale_BothValidUntouched(t *testing.T) {
+	t.Setenv("LANG", "es_AR.UTF-8")
+	t.Setenv("LC_ALL", "es_AR.UTF-8")
+	sanitizeLocale()
+	if os.Getenv("LANG") != "es_AR.UTF-8" {
+		t.Errorf("expected LANG to remain %q, got %q", "es_AR.UTF-8", os.Getenv("LANG"))
+	}
+	if os.Getenv("LC_ALL") != "es_AR.UTF-8" {
+		t.Errorf("expected LC_ALL to remain %q, got %q", "es_AR.UTF-8", os.Getenv("LC_ALL"))
+	}
+}
+
 func TestRunBootstrap_MissingConfig(t *testing.T) {
 	ctx := context.Background()
 	_, err := RunBootstrap(ctx, "non_existent_config.lua", false, nil)
@@ -96,7 +180,7 @@ func TestRunBootstrap_Success(t *testing.T) {
 
 	// Register vista query so LoadScreen can load the home screen from DB
 	coreMock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		[][]any{{`{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}`}},
 		nil,
@@ -180,7 +264,7 @@ func TestRunBootstrap_DefaultVistaID(t *testing.T) {
 
 	// Register vista query for default "home" vista (no EntryPointViewID in config)
 	coreMock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		[][]any{{`{"area":"default_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"title","component_ref":"label","label":"Default Home"}]}`}},
 		nil,
@@ -249,7 +333,7 @@ func TestRunBootstrap_LoadScreenFailure(t *testing.T) {
 
 	// Register vista query to return ErrNoRows — simulates missing vista
 	coreMock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		nil,
 		pgx.ErrNoRows,
@@ -318,7 +402,7 @@ func TestRunBootstrap_IntegrationWithLogs(t *testing.T) {
 	// Register layout query for transacciones_list
 	layoutJSON := `{"area":"root","component_ref":"container","layout":{"type":"grid","columns":["1fr"],"rows":["30px","50px","1fr"],"gap":"10"},"children":[{"area":"header","component_ref":"label","label":"Listado de Transacciones"},{"area":"filters_container","component_ref":"container","layout":{"type":"grid","columns":["250px","200px","120px"],"rows":["40px"],"gap":"10"},"children":[{"area":"emp_cod_filter","component_ref":"text_input","placeholder":"Filtrar por Empresa (LIKE)","bind_to":"emp_cod"},{"area":"status_filter","component_ref":"text_input","placeholder":"Filtrar por Status (LIKE)","bind_to":"status"},{"area":"search_button","component_ref":"button","label":"Actualizar","submit_action":"search"}]},{"area":"transactions_grid","component_ref":"data_grid","filter_mode":"server","data_source":"SELECT id, emp_cod, monto, status FROM public.transacciones WHERE emp_cod LIKE $1 AND status LIKE $2","filter_keys":["emp_cod","status"]}]}`
 	coreMock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		[][]any{{layoutJSON}},
 		nil,

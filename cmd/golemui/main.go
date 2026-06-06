@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -23,7 +25,29 @@ type App struct {
 
 var initDB = db.InitDB
 
+func sanitizeLocale() {
+	lang := strings.TrimSpace(os.Getenv("LANG"))
+	lcAll := strings.TrimSpace(os.Getenv("LC_ALL"))
+	isInvalid := func(v string) bool {
+		return v == "" || v == "C" || v == "POSIX"
+	}
+
+	// Solo pisamos LC_ALL si es explícitamente C o POSIX.
+	// Si está vacía, no la tocamos — es el estado normal en un escritorio Linux.
+	if lcAll == "C" || lcAll == "POSIX" {
+		os.Setenv("LC_ALL", "en_US.UTF-8")
+	}
+
+	// Si LANG es inválida y LC_ALL no tiene un valor que la pise, saneamos LANG
+	if isInvalid(lang) && (isInvalid(lcAll) || lcAll == "en_US.UTF-8") {
+		os.Setenv("LANG", "en_US.UTF-8")
+	}
+}
+
 func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneApp fyne.App) (*App, error) {
+	// 0. Sanitize locale before Fyne initialization
+	sanitizeLocale()
+
 	// 1. Configuration loading (pkg/lua)
 	cfg, err := lua.LoadConfig(configPath)
 	if err != nil {
@@ -67,7 +91,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	// Setup navigation callback
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
-		node, err := ui.LoadScreen(ctx, ui.CorePool, vID)
+		node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
 		if err != nil {
 			log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
 			return
@@ -86,7 +110,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 		vistaID = "home"
 	}
 
-	homeNode, err := ui.LoadScreen(ctx, ui.CorePool, vistaID)
+	homeNode, err := ui.LoadScreen(ctx, ui.CorePool, vistaID, cfg.LayoutQuery)
 	if err != nil {
 		dbPool.Close()
 		return nil, fmt.Errorf("failed to load screen %q: %w", vistaID, err)

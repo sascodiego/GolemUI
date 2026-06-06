@@ -9,16 +9,21 @@ import (
 	"GolemUI/pkg/db"
 )
 
-func LoadScreen(ctx context.Context, pool db.DatabasePool, vistaID string) (NodeMeta, error) {
+const DefaultLayoutQuery = "SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1"
+
+func LoadScreen(ctx context.Context, pool db.DatabasePool, vistaID string, layoutQuery string) (NodeMeta, error) {
 	if pool == nil {
 		return NodeMeta{}, fmt.Errorf("LoadScreen: pool is nil")
+	}
+
+	if layoutQuery == "" {
+		layoutQuery = DefaultLayoutQuery
 	}
 
 	log.Printf("[UI/ScreenLoader] Querying layout definition from DB core for vistaID: %q", vistaID)
 
 	var jsonBytes []byte
-	sql := "SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1"
-	err := pool.QueryRow(ctx, sql, vistaID).Scan(&jsonBytes)
+	err := pool.QueryRow(ctx, layoutQuery, vistaID).Scan(&jsonBytes)
 	if err != nil {
 		log.Printf("[UI/ScreenLoader] Error: vista %q not found in DB core: %v", vistaID, err)
 		return NodeMeta{}, fmt.Errorf("LoadScreen: vista %q not found", vistaID)
