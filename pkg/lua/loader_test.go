@@ -183,3 +183,76 @@ golemui_driver = {
 		t.Errorf("expected EntryPointViewID to be empty string when absent, got %q", config.EntryPointViewID)
 	}
 }
+
+func TestLoadConfig_LayoutQuery_Present(t *testing.T) {
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password123"
+    },
+    BusinessDB = {
+        Host = "127.0.0.1",
+        Port = 5433,
+        Database = "negocio_production",
+        User = "biz_user",
+        Password = "biz_password"
+    },
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1",
+    LayoutQuery = "SELECT col FROM tbl WHERE id = $1"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_layout_query.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	config, err := lua.LoadConfig(tmpFile)
+	if err != nil {
+		t.Fatalf("Expected successful load, got error: %v", err)
+	}
+
+	if config.LayoutQuery != "SELECT col FROM tbl WHERE id = $1" {
+		t.Errorf("expected LayoutQuery %q, got %q", "SELECT col FROM tbl WHERE id = $1", config.LayoutQuery)
+	}
+}
+
+func TestLoadConfig_LayoutQuery_Absent(t *testing.T) {
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password123"
+    },
+    BusinessDB = {
+        Host = "127.0.0.1",
+        Port = 5433,
+        Database = "negocio_production",
+        User = "biz_user",
+        Password = "biz_password"
+    },
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_layout_query.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	config, err := lua.LoadConfig(tmpFile)
+	if err != nil {
+		t.Fatalf("Expected successful load, got error: %v", err)
+	}
+
+	if config.LayoutQuery != "" {
+		t.Errorf("expected LayoutQuery to be empty string when absent, got %q", config.LayoutQuery)
+	}
+}

@@ -12,6 +12,57 @@ import (
 	"GolemUI/pkg/ui"
 )
 
+func TestDefaultLayoutQuery(t *testing.T) {
+	expected := "SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1"
+	if ui.DefaultLayoutQuery != expected {
+		t.Errorf("expected DefaultLayoutQuery %q, got %q", expected, ui.DefaultLayoutQuery)
+	}
+}
+
+func TestLoadScreen_CustomQuery(t *testing.T) {
+	validJSONB := `{"area":"custom_root","component_ref":"container","layout":{"type":"vertical"},"children":[]}`
+	customSQL := "SELECT layout FROM custom WHERE id = $1"
+
+	mock := db.NewMockDBPool()
+	mock.RegisterQuery(
+		customSQL,
+		[]string{"layout"},
+		[][]any{{validJSONB}},
+		nil,
+	)
+
+	node, err := ui.LoadScreen(context.Background(), mock, "custom", customSQL)
+	if err != nil {
+		t.Fatalf("expected no error with custom query, got: %v", err)
+	}
+	if node.ComponentRef != "container" {
+		t.Errorf("expected ComponentRef %q, got %q", "container", node.ComponentRef)
+	}
+	if node.Area != "custom_root" {
+		t.Errorf("expected Area %q, got %q", "custom_root", node.Area)
+	}
+}
+
+func TestLoadScreen_EmptyFallback(t *testing.T) {
+	validJSONB := `{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[]}`
+
+	mock := db.NewMockDBPool()
+	mock.RegisterQuery(
+		ui.DefaultLayoutQuery,
+		[]string{"config_columnas"},
+		[][]any{{validJSONB}},
+		nil,
+	)
+
+	node, err := ui.LoadScreen(context.Background(), mock, "home", "")
+	if err != nil {
+		t.Fatalf("expected no error with empty fallback query, got: %v", err)
+	}
+	if node.ComponentRef != "container" {
+		t.Errorf("expected ComponentRef %q, got %q", "container", node.ComponentRef)
+	}
+}
+
 func TestLoadScreen(t *testing.T) {
 	validJSONB := `{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}`
 
@@ -28,7 +79,7 @@ func TestLoadScreen(t *testing.T) {
 			vistaID: "home",
 			setupMock: func(m *db.MockDBPool) {
 				m.RegisterQuery(
-					"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+					ui.DefaultLayoutQuery,
 					[]string{"config_columnas"},
 					[][]any{{validJSONB}},
 					nil,
@@ -61,7 +112,7 @@ func TestLoadScreen(t *testing.T) {
 			vistaID: "nonexistent",
 			setupMock: func(m *db.MockDBPool) {
 				m.RegisterQuery(
-					"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+					ui.DefaultLayoutQuery,
 					[]string{"config_columnas"},
 					nil,
 					pgx.ErrNoRows,
@@ -77,7 +128,7 @@ func TestLoadScreen(t *testing.T) {
 			vistaID: "broken",
 			setupMock: func(m *db.MockDBPool) {
 				m.RegisterQuery(
-					"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+					ui.DefaultLayoutQuery,
 					[]string{"config_columnas"},
 					[][]any{{`{bad json`}},
 					nil,
@@ -118,7 +169,7 @@ func TestLoadScreen(t *testing.T) {
 				pool = mock
 			}
 
-			node, err := ui.LoadScreen(context.Background(), pool, tt.vistaID)
+			node, err := ui.LoadScreen(context.Background(), pool, tt.vistaID, "")
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("LoadScreen() error = %v, wantErr %v", err, tt.wantErr)
@@ -135,13 +186,13 @@ func TestLoadScreen(t *testing.T) {
 func TestLoadScreen_MissingVistaErrorMessage(t *testing.T) {
 	mock := db.NewMockDBPool()
 	mock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		nil,
 		pgx.ErrNoRows,
 	)
 
-	_, err := ui.LoadScreen(context.Background(), mock, "missing_screen")
+	_, err := ui.LoadScreen(context.Background(), mock, "missing_screen", "")
 	if err == nil {
 		t.Fatal("expected error for missing vista, got nil")
 	}
@@ -155,13 +206,13 @@ func TestLoadScreen_MissingVistaErrorMessage(t *testing.T) {
 func TestLoadScreen_MalformedJSONBErrorType(t *testing.T) {
 	mock := db.NewMockDBPool()
 	mock.RegisterQuery(
-		"SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1",
+		ui.DefaultLayoutQuery,
 		[]string{"config_columnas"},
 		[][]any{{`{invalid`}},
 		nil,
 	)
 
-	_, err := ui.LoadScreen(context.Background(), mock, "broken")
+	_, err := ui.LoadScreen(context.Background(), mock, "broken", "")
 	if err == nil {
 		t.Fatal("expected error for malformed JSONB, got nil")
 	}
@@ -174,7 +225,7 @@ func TestLoadScreen_MalformedJSONBErrorType(t *testing.T) {
 }
 
 func TestLoadScreen_NilPoolErrorMessage(t *testing.T) {
-	_, err := ui.LoadScreen(context.Background(), nil, "home")
+	_, err := ui.LoadScreen(context.Background(), nil, "home", "")
 	if err == nil {
 		t.Fatal("expected error for nil pool, got nil")
 	}

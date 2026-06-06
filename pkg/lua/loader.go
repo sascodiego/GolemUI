@@ -15,10 +15,11 @@ type ConfigConexion struct {
 }
 
 type BootstrapConfig struct {
-	UIDB            ConfigConexion
-	BusinessDB      ConfigConexion
-	EntryPointQuery string
+	UIDB             ConfigConexion
+	BusinessDB       ConfigConexion
+	EntryPointQuery  string
 	EntryPointViewID string
+	LayoutQuery      string
 }
 
 func getStringField(tbl *lua.LTable, key string) string {
@@ -102,11 +103,13 @@ func LoadConfig(path string) (*BootstrapConfig, error) {
 
 	entryPointQuery := getStringField(tbl, "EntryPointQuery")
 	entryPointViewID := getStringField(tbl, "EntryPointViewID")
+	layoutQuery := getStringField(tbl, "LayoutQuery")
 
 	return &BootstrapConfig{
 		UIDB:             uiDB,
 		BusinessDB:       bizDB,
 		EntryPointQuery:  entryPointQuery,
 		EntryPointViewID: entryPointViewID,
+		LayoutQuery:      layoutQuery,
 	}, nil
 }
