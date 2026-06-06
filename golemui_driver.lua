@@ -13,5 +13,6 @@ golemui_driver = {
         User = "golemui_render_engine",
         Password = "secret_password_for_business"
     },
-    EntryPointViewID = "transacciones_list"
+    EntryPointViewID = "transacciones_list",
+    LayoutQuery = "SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1"
 }
