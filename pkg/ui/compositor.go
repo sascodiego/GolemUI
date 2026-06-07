@@ -9,15 +9,15 @@ import (
 	"strings"
 	"sync"
 
+	"GolemUI/pkg/db"
+	"GolemUI/pkg/eventbus"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
-	"GolemUI/pkg/db"
-	"GolemUI/pkg/eventbus"
 )
 
 var BusinessPool db.DatabasePool
-var CorePool     db.DatabasePool
+var CorePool db.DatabasePool
 var LocalEventBus eventbus.EventBus
 var Navigate func(vistaID string)
 
@@ -262,6 +262,25 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 			model.mu.Unlock()
 		}
 
+		// Row selection capture: publish selected row as header→value map
+		table.OnSelected = func(id widget.TableCellID) {
+			model.mu.RLock()
+			if id.Row < 0 || id.Row >= len(model.rows) {
+				model.mu.RUnlock()
+				return
+			}
+			row := model.rows[id.Row]
+			headers := model.headers
+			rowMap := make(map[string]any, len(headers))
+			for i := 0; i < len(headers) && i < len(row); i++ {
+				rowMap[headers[i]] = row[i]
+			}
+			model.mu.RUnlock()
+			if LocalEventBus != nil {
+				LocalEventBus.Publish("publish_selection", rowMap)
+			}
+		}
+
 		return table, nil
 
 	default:
@@ -272,7 +291,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 }
 
 // extractOrderedArgs maps snapshot keys to positional args ($1, $2, ...) in FilterKeys order.
-// Missing keys default to empty string (so LIKE '' matches everything instead of NULL = false).
+// Missing keys default to empty string (so LIKE ” matches everything instead of NULL = false).
 // Returns empty slice when filterKeys is empty — no alphabetical fallback.
 func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
 	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs called with filterKeys: %+v (len: %d)", filterKeys, len(filterKeys))
@@ -535,4 +554,3 @@ func formatValue(val any) string {
 	}
 	return fmt.Sprintf("%v", val)
 }
-
