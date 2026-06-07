@@ -1,15 +1,15 @@
-package lua_test
+package config_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"GolemUI/pkg/lua"
+	"GolemUI/pkg/config"
 )
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	_, err := lua.LoadConfig("non_existent_file_xyz.yaml")
+	_, err := config.LoadConfig("non_existent_file_xyz.yaml")
 	if err == nil {
 		t.Error("Expected an error for non-existent config file, got nil")
 	}
@@ -29,7 +29,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver_test.yaml")
@@ -37,7 +36,7 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	config, err := lua.LoadConfig(tmpFile)
+	config, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("Expected successful load, got error: %v", err)
 	}
@@ -50,9 +49,6 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 		t.Errorf("BusinessDB values mismatched: %+v", config.BusinessDB)
 	}
 
-	if config.EntryPointQuery != "SELECT * FROM golemui.layouts LIMIT 1" {
-		t.Errorf("EntryPointQuery mismatched: %q", config.EntryPointQuery)
-	}
 }
 
 func TestLoadConfig_InvalidSyntax(t *testing.T) {
@@ -64,7 +60,7 @@ func TestLoadConfig_InvalidSyntax(t *testing.T) {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	_, err := lua.LoadConfig(tmpFile)
+	_, err := config.LoadConfig(tmpFile)
 	if err == nil {
 		t.Error("Expected parse error for invalid YAML syntax, but got no error")
 	}
@@ -84,7 +80,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver_missing.yaml")
@@ -92,7 +87,7 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	_, err := lua.LoadConfig(tmpFile)
+	_, err := config.LoadConfig(tmpFile)
 	if err == nil {
 		t.Error("Expected error due to missing required connection fields, but got no error")
 	}
@@ -112,7 +107,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 entry_point_view_id: "dashboard"
 `
 	tmpDir := t.TempDir()
@@ -121,7 +115,7 @@ entry_point_view_id: "dashboard"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	config, err := lua.LoadConfig(tmpFile)
+	config, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("Expected successful load, got error: %v", err)
 	}
@@ -145,7 +139,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_viewid.yaml")
@@ -153,7 +146,7 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	config, err := lua.LoadConfig(tmpFile)
+	config, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("Expected successful load, got error: %v", err)
 	}
@@ -177,7 +170,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 layout_query: "SELECT col FROM tbl WHERE id = $1"
 `
 	tmpDir := t.TempDir()
@@ -186,7 +178,7 @@ layout_query: "SELECT col FROM tbl WHERE id = $1"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	config, err := lua.LoadConfig(tmpFile)
+	config, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("Expected successful load, got error: %v", err)
 	}
@@ -210,7 +202,6 @@ business_db:
   database: "negocio_production"
   user: "biz_user"
   password: "biz_password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_layout_query.yaml")
@@ -218,7 +209,7 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
-	config, err := lua.LoadConfig(tmpFile)
+	config, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("Expected successful load, got error: %v", err)
 	}

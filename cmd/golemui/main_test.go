@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"GolemUI/pkg/db"
-	"GolemUI/pkg/lua"
+	"GolemUI/pkg/config"
 	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2/test"
 	"github.com/jackc/pgx/v5"
@@ -99,22 +99,22 @@ func TestSanitizeLocale_BothValidUntouched(t *testing.T) {
 }
 
 // helper: build a valid config struct for tests
-func testConfig() *lua.BootstrapConfig {
-	return &lua.BootstrapConfig{
-		UIDB:       lua.ConfigConexion{Host: "localhost", Port: 5432, Database: "golemui_core", User: "postgres", Password: "password"},
-		BusinessDB: lua.ConfigConexion{Host: "localhost", Port: 5432, Database: "negocio_production", User: "postgres", Password: "password"},
+func testConfig() *config.BootstrapConfig {
+	return &config.BootstrapConfig{
+		UIDB:       config.ConfigConexion{Host: "localhost", Port: 5432, Database: "golemui_core", User: "postgres", Password: "password"},
+		BusinessDB: config.ConfigConexion{Host: "localhost", Port: 5432, Database: "negocio_production", User: "postgres", Password: "password"},
 	}
 }
 
 // helper: write YAML config to temp file and load it via LoadConfig
-func loadTestYAML(t *testing.T, content string) *lua.BootstrapConfig {
+func loadTestYAML(t *testing.T, content string) *config.BootstrapConfig {
 	t.Helper()
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver_test.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp config: %v", err)
 	}
-	cfg, err := lua.LoadConfig(tmpFile)
+	cfg, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("failed to load test config: %v", err)
 	}
@@ -155,7 +155,7 @@ func setupMockDB(t *testing.T, layoutJSON string, layoutErr error) (*db.MockDBPo
 }
 
 func TestRunBootstrap_MissingConfig(t *testing.T) {
-	_, err := lua.LoadConfig("non_existent_config.yaml")
+	_, err := config.LoadConfig("non_existent_config.yaml")
 	if err == nil {
 		t.Error("expected error due to missing configuration file, got nil")
 	}
@@ -175,7 +175,6 @@ business_db:
   database: "negocio_production"
   user: "postgres"
   password: "password"
-entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "golemui_driver.yaml")
@@ -186,7 +185,7 @@ entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	cfg, err := lua.LoadConfig(tmpFile)
+	cfg, err := config.LoadConfig(tmpFile)
 	if err != nil {
 		t.Fatalf("failed to load valid config: %v", err)
 	}
@@ -220,7 +219,7 @@ business_db:
 		t.Fatalf("failed to write temp config: %v", err)
 	}
 
-	_, err := lua.LoadConfig(tmpFile)
+	_, err := config.LoadConfig(tmpFile)
 	if err == nil {
 		t.Error("expected error for config with missing required fields, got nil")
 	}

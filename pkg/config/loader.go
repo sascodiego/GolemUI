@@ -1,4 +1,4 @@
-package lua
+package config
 
 import (
 	"fmt"
@@ -18,7 +18,6 @@ type ConfigConexion struct {
 type BootstrapConfig struct {
 	UIDB             ConfigConexion `mapstructure:"uidb"`
 	BusinessDB       ConfigConexion `mapstructure:"business_db"`
-	EntryPointQuery  string         `mapstructure:"entry_point_query"`
 	EntryPointViewID string         `mapstructure:"entry_point_view_id"`
 	LayoutQuery      string         `mapstructure:"layout_query"`
 }
