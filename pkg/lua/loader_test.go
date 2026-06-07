@@ -4,39 +4,35 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
 	"GolemUI/pkg/lua"
 )
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	_, err := lua.LoadConfig("non_existent_file_xyz.lua")
+	_, err := lua.LoadConfig("non_existent_file_xyz.yaml")
 	if err == nil {
 		t.Error("Expected an error for non-existent config file, got nil")
 	}
 }
 
 func TestLoadConfig_Success(t *testing.T) {
-	// Create a temporary Lua configuration file
 	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost",
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
-}
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_test.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_test.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
@@ -60,47 +56,38 @@ golemui_driver = {
 }
 
 func TestLoadConfig_InvalidSyntax(t *testing.T) {
-	// Invalid syntax: missing brace
-	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost"
--- missing closing braces
-`
+	// Invalid YAML: unclosed brace
+	content := `{ invalid yaml: [`
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_invalid.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_invalid.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
 	_, err := lua.LoadConfig(tmpFile)
 	if err == nil {
-		t.Error("Expected compile error for invalid Lua syntax, but got no error")
+		t.Error("Expected parse error for invalid YAML syntax, but got no error")
 	}
 }
 
 func TestLoadConfig_MissingFields(t *testing.T) {
-	// Missing "Host" in UIDB
+	// Missing "host" in UIDB
 	content := `
-golemui_driver = {
-    UIDB = {
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
-}
+uidb:
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_missing.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_missing.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
@@ -113,27 +100,23 @@ golemui_driver = {
 
 func TestLoadConfig_EntryPointViewID_Present(t *testing.T) {
 	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost",
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1",
-    EntryPointViewID = "dashboard"
-}
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
+entry_point_view_id: "dashboard"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_viewid.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_viewid.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
@@ -150,26 +133,22 @@ golemui_driver = {
 
 func TestLoadConfig_EntryPointViewID_Absent(t *testing.T) {
 	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost",
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
-}
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_viewid.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_viewid.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
@@ -186,27 +165,23 @@ golemui_driver = {
 
 func TestLoadConfig_LayoutQuery_Present(t *testing.T) {
 	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost",
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1",
-    LayoutQuery = "SELECT col FROM tbl WHERE id = $1"
-}
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
+layout_query: "SELECT col FROM tbl WHERE id = $1"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_layout_query.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_layout_query.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
@@ -223,26 +198,22 @@ golemui_driver = {
 
 func TestLoadConfig_LayoutQuery_Absent(t *testing.T) {
 	content := `
-golemui_driver = {
-    UIDB = {
-        Host = "localhost",
-        Port = 5432,
-        Database = "golemui_core",
-        User = "postgres",
-        Password = "password123"
-    },
-    BusinessDB = {
-        Host = "127.0.0.1",
-        Port = 5433,
-        Database = "negocio_production",
-        User = "biz_user",
-        Password = "biz_password"
-    },
-    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
-}
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "postgres"
+  password: "password123"
+business_db:
+  host: "127.0.0.1"
+  port: 5433
+  database: "negocio_production"
+  user: "biz_user"
+  password: "biz_password"
+entry_point_query: "SELECT * FROM golemui.layouts LIMIT 1"
 `
 	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_layout_query.lua")
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_layout_query.yaml")
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +9,9 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/eventbus"
 	"GolemUI/pkg/lua"
@@ -26,11 +28,6 @@ type App struct {
 
 var initDB = db.InitDB
 
-var (
-	flagConfig = flag.String("config", "golemui_driver.lua", "Path to Lua configuration file")
-	flagView   = flag.String("view", "", "Override entry point view ID (overrides Lua config EntryPointViewID)")
-)
-
 func sanitizeLocale() {
 	lang := strings.TrimSpace(os.Getenv("LANG"))
 	lcAll := strings.TrimSpace(os.Getenv("LC_ALL"))
@@ -38,29 +35,20 @@ func sanitizeLocale() {
 		return v == "" || v == "C" || v == "POSIX"
 	}
 
-	// Solo pisamos LC_ALL si es explícitamente C o POSIX.
-	// Si está vacía, no la tocamos — es el estado normal en un escritorio Linux.
 	if lcAll == "C" || lcAll == "POSIX" {
 		os.Setenv("LC_ALL", "en_US.UTF-8")
 	}
 
-	// Si LANG es inválida y LC_ALL no tiene un valor que la pise, saneamos LANG
 	if isInvalid(lang) && (isInvalid(lcAll) || lcAll == "en_US.UTF-8") {
 		os.Setenv("LANG", "en_US.UTF-8")
 	}
 }
 
-func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneApp fyne.App, viewOverride string) (*App, error) {
+func RunBootstrap(ctx context.Context, cfg *lua.BootstrapConfig, runWindow bool, fyneApp fyne.App) (*App, error) {
 	// 0. Sanitize locale before Fyne initialization
 	sanitizeLocale()
 
-	// 1. Configuration loading (pkg/lua)
-	cfg, err := lua.LoadConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config from %s: %w", configPath, err)
-	}
-
-	// Convert lua ConfigConexion to db Config
+	// 1. Convert lua ConfigConexion to db Config
 	coreCfg := db.Config{
 		Host:     cfg.UIDB.Host,
 		Port:     cfg.UIDB.Port,
@@ -111,10 +99,7 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	}
 
 	// 4. Load home screen from core database (pkg/ui)
-	vistaID := viewOverride
-	if vistaID == "" {
-		vistaID = cfg.EntryPointViewID
-	}
+	vistaID := cfg.EntryPointViewID
 	if vistaID == "" {
 		vistaID = "home"
 	}
@@ -149,12 +134,36 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 }
 
 func main() {
-	flag.Parse()
+	pflag.String("config", "golemui_driver.yaml", "Path to YAML configuration file")
+	pflag.String("view", "", "Override entry point view ID (overrides config and env)")
+	pflag.Parse()
+
+	configPath, _ := pflag.CommandLine.GetString("config")
+
 	ctx := context.Background()
-	log.Printf("Starting GolemUI — config: %s, view: %s", *flagConfig, *flagView)
-	_, err := RunBootstrap(ctx, *flagConfig, true, nil, *flagView)
+	log.Printf("Starting GolemUI — config: %s", configPath)
+
+	cfg, err := lua.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Bootstrap error: %v", err)
+	}
+
+	// Env/flag overrides via Viper
+	v := viper.New()
+	v.SetEnvPrefix("GOLEMUI")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	// View resolution: pflag > env > config file
+	viewOverride, _ := pflag.CommandLine.GetString("view")
+	if viewOverride != "" {
+		cfg.EntryPointViewID = viewOverride
+	} else if envView := v.GetString("entry_point_view_id"); envView != "" {
+		cfg.EntryPointViewID = envView
+	}
+
+	_, err = RunBootstrap(ctx, cfg, true, nil)
 	if err != nil {
 		log.Fatalf("Bootstrap error: %v", err)
 	}
 }
-

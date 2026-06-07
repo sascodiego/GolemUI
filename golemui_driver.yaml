@@ -1,0 +1,14 @@
+uidb:
+  host: "localhost"
+  port: 5432
+  database: "golemui_core"
+  user: "golemui_core_engine"
+  password: "secret_password_for_ui"
+business_db:
+  host: "localhost"
+  port: 5432
+  database: "negocio_production"
+  user: "golemui_render_engine"
+  password: "secret_password_for_business"
+entry_point_view_id: "transacciones_list"
+layout_query: "SELECT config_columnas FROM golemui.vistas_consulta WHERE id = $1"
