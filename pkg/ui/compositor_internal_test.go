@@ -5,6 +5,6 @@ import (
 )
 
 func TestDataGridModelStructExists(t *testing.T) {
-	var model dataGridModel
+	model := &dataGridModel{}
 	_ = model
 }

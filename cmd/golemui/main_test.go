@@ -10,6 +10,7 @@ import (
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/config"
 	"GolemUI/pkg/ui"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"github.com/jackc/pgx/v5"
 )
@@ -143,6 +144,14 @@ func setupMockDB(t *testing.T, layoutJSON string, layoutErr error) (*db.MockDBPo
 			layoutErr,
 		)
 	}
+
+	// Register navigation menu query (returns empty menu by default)
+	coreMock.RegisterQuery(
+		ui.NavigationMenuQuery,
+		[]string{"id", "padre_id", "titulo", "vista_id", "orden"},
+		[][]any{}, // empty menu
+		nil,
+	)
 
 	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
 		return &db.DB{
@@ -395,5 +404,41 @@ func TestRunBootstrap_IntegrationWithLogs(t *testing.T) {
 	_, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("expected successful bootstrap, got error: %v", err)
+	}
+}
+
+// TestRunBootstrap_HSplitLayout verifies that RunBootstrap creates a split layout
+// with sidebar navigation instead of a flat window content.
+func TestRunBootstrap_HSplitLayout(t *testing.T) {
+	_, _ = setupMockDB(t, `{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome"}]}`, nil)
+
+	cfg := testConfig()
+	cfg.EntryPointViewID = "home"
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
+	if err != nil {
+		t.Fatalf("unexpected bootstrap error: %v", err)
+	}
+
+	if appInstance == nil {
+		t.Fatal("expected app instance, got nil")
+	}
+
+	// Verify window content is a Split (HSplit) container
+	winContent := appInstance.Window.Content()
+	if winContent == nil {
+		t.Fatal("expected window content, got nil")
+	}
+
+	split, ok := winContent.(*container.Split)
+	if !ok {
+		t.Fatalf("expected window content to be *container.Split, got %T", winContent)
+	}
+
+	if !split.Horizontal {
+		t.Error("expected horizontal split (HSplit)")
 	}
 }

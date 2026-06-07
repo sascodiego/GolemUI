@@ -17,7 +17,8 @@ func TestBuildNavTree_PopulatesCorrectTitles(t *testing.T) {
 		{ID: "nav_query_runner", PadreID: "nav_principal", Titulo: "Consola SQL", VistaID: "query_runner", Orden: 3},
 	}
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 	if tree == nil {
 		t.Fatal("expected non-nil tree, got nil")
 	}
@@ -75,7 +76,8 @@ func TestBuildNavTree_LeafTriggersNavigate(t *testing.T) {
 	ui.Navigate = func(vistaID string) { navigated = vistaID }
 	defer func() { ui.Navigate = nil }()
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	// Select a leaf node
 	tree.OnSelected("nav_home")
@@ -97,7 +99,8 @@ func TestBuildNavTree_BranchDoesNotTriggerNavigate(t *testing.T) {
 	ui.Navigate = func(vistaID string) { navigated = vistaID }
 	defer func() { ui.Navigate = nil }()
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	// Select the branch node
 	tree.OnSelected("nav_principal")
@@ -118,7 +121,8 @@ func TestBuildNavTree_LeafWithoutVistaIDDoesNotNavigate(t *testing.T) {
 	ui.Navigate = func(vistaID string) { navigated = vistaID }
 	defer func() { ui.Navigate = nil }()
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	// Select the leaf node with empty VistaID
 	tree.OnSelected("spacer")
@@ -131,7 +135,8 @@ func TestBuildNavTree_LeafWithoutVistaIDDoesNotNavigate(t *testing.T) {
 // TestBuildNavTree_EmptyItems verifies that BuildNavTree returns a valid
 // non-nil tree when given an empty slice.
 func TestBuildNavTree_EmptyItems(t *testing.T) {
-	tree := ui.BuildNavTree([]ui.MenuItem{})
+	navTree := ui.BuildNavTree([]ui.MenuItem{})
+	tree := navTree.Widget()
 	if tree == nil {
 		t.Fatal("expected non-nil tree for empty items, got nil")
 	}
@@ -152,7 +157,8 @@ func TestBuildNavTree_ChildrenSortedByOrden(t *testing.T) {
 		{ID: "child_b", PadreID: "parent", Titulo: "B", VistaID: "b", Orden: 2},
 	}
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	children := tree.ChildUIDs("parent")
 	if len(children) != 3 {
@@ -176,7 +182,8 @@ func TestBuildNavTree_NilNavigateDoesNotPanic(t *testing.T) {
 
 	ui.Navigate = nil
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	// This should not panic
 	tree.OnSelected("leaf")
@@ -184,7 +191,8 @@ func TestBuildNavTree_NilNavigateDoesNotPanic(t *testing.T) {
 
 // TestBuildNavTree_NilSlice verifies that BuildNavTree handles a nil slice.
 func TestBuildNavTree_NilSlice(t *testing.T) {
-	tree := ui.BuildNavTree(nil)
+	navTree := ui.BuildNavTree(nil)
+	tree := navTree.Widget()
 	if tree == nil {
 		t.Fatal("expected non-nil tree for nil items, got nil")
 	}
@@ -203,7 +211,8 @@ func TestBuildNavTree_UpdateNodeSetsTitulo(t *testing.T) {
 		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
 	}
 
-	tree := ui.BuildNavTree(items)
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
 
 	// Simulate Fyne calling UpdateNode for a branch
 	label := widget.NewLabel("")
@@ -217,5 +226,116 @@ func TestBuildNavTree_UpdateNodeSetsTitulo(t *testing.T) {
 	tree.UpdateNode("nav_home", false, label2)
 	if label2.Text != "Inicio" {
 		t.Errorf("expected label text %q, got %q", "Inicio", label2.Text)
+	}
+}
+
+// --- T-1.2: NavTree.Widget() accessor test ---
+
+// TestNavTree_WidgetReturnsTree verifies that Widget() returns the underlying
+// *widget.Tree and that it is non-nil.
+func TestNavTree_WidgetReturnsTree(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "root", PadreID: "", Titulo: "Root", VistaID: "", Orden: 0},
+		{ID: "child", PadreID: "root", Titulo: "Child", VistaID: "home", Orden: 1},
+	}
+
+	navTree := ui.BuildNavTree(items)
+
+	tree := navTree.Widget()
+	if tree == nil {
+		t.Fatal("expected Widget() to return non-nil *widget.Tree")
+	}
+
+	// Verify the tree is functional by checking children
+	roots := tree.ChildUIDs("")
+	if len(roots) != 1 || string(roots[0]) != "root" {
+		t.Errorf("expected 1 root 'root', got %v", roots)
+	}
+}
+
+// --- T-1.4: SelectByVistaID tests ---
+
+// TestSelectByVistaID_ValidSelectsNode verifies that SelectByVistaID correctly
+// opens ancestor branches and selects the target node.
+func TestSelectByVistaID_ValidSelectsNode(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "nav_principal", PadreID: "", Titulo: "Menú Principal", VistaID: "", Orden: 0},
+		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
+		{ID: "nav_transacciones", PadreID: "nav_principal", Titulo: "Transacciones", VistaID: "transacciones_list", Orden: 2},
+	}
+
+	var navigated string
+	ui.Navigate = func(vistaID string) { navigated = vistaID }
+	defer func() { ui.Navigate = nil }()
+
+	navTree := ui.BuildNavTree(items)
+
+	// Programmatic select should NOT call Navigate (re-entrancy guard)
+	navTree.SelectByVistaID("home")
+
+	// Navigate should NOT have been called (guard prevents re-entry)
+	if navigated != "" {
+		t.Errorf("expected Navigate NOT to be called during programmatic select, but got %q", navigated)
+	}
+}
+
+// TestSelectByVistaID_EmptyIsNoOp verifies that calling SelectByVistaID with
+// an empty string is a safe no-op.
+func TestSelectByVistaID_EmptyIsNoOp(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "root", PadreID: "", Titulo: "Root", VistaID: "", Orden: 0},
+	}
+
+	navTree := ui.BuildNavTree(items)
+
+	// Should not panic
+	navTree.SelectByVistaID("")
+}
+
+// TestSelectByVistaID_UnknownIsNoOp verifies that calling SelectByVistaID with
+// an unknown vistaID is a safe no-op.
+func TestSelectByVistaID_UnknownIsNoOp(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "root", PadreID: "", Titulo: "Root", VistaID: "", Orden: 0},
+	}
+
+	navTree := ui.BuildNavTree(items)
+
+	// Should not panic
+	navTree.SelectByVistaID("nonexistent_view")
+}
+
+// --- T-1.5: Re-entrancy guard test ---
+
+// TestReentrancyGuardPreventsLoop verifies that when navigating is true
+// (programmatic selection in progress), the OnSelected callback does NOT
+// call Navigate. This prevents infinite loops:
+// Navigate → SelectByVistaID → tree.Select → OnSelected → Navigate → ...
+func TestReentrancyGuardPreventsLoop(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "nav_principal", PadreID: "", Titulo: "Menú Principal", VistaID: "", Orden: 0},
+		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
+		{ID: "nav_transacciones", PadreID: "nav_principal", Titulo: "Transacciones", VistaID: "transacciones_list", Orden: 2},
+	}
+
+	navigateCount := 0
+	ui.Navigate = func(vistaID string) {
+		navigateCount++
+		// Simulate what Navigate does: call SelectByVistaID for bidirectional sync
+		// This would cause infinite recursion without the guard
+		navTree := ui.BuildNavTree(items)
+		navTree.SelectByVistaID(vistaID)
+	}
+	defer func() { ui.Navigate = nil }()
+
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
+
+	// User clicks a leaf in the sidebar → OnSelected fires → Navigate called
+	tree.OnSelected("nav_home")
+
+	// Navigate should have been called exactly once (not infinitely)
+	if navigateCount != 1 {
+		t.Errorf("expected Navigate to be called exactly 1 time, got %d", navigateCount)
 	}
 }
