@@ -9,6 +9,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
@@ -82,7 +83,21 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	}
 	win := fyneApp.NewWindow("GolemUI Client")
 
-	// Setup navigation callback
+	// Setup navigation menu and split layout
+	menuItems, err := ui.LoadNavigationMenu(ctx, ui.CorePool)
+	if err != nil {
+		dbPool.Close()
+		return nil, fmt.Errorf("failed to load navigation menu: %w", err)
+	}
+	navTree := ui.BuildNavTree(menuItems)
+
+	// Create split layout: sidebar (left) + dynamic content area (right)
+	mainContainer := container.NewMax()
+	sidebarScroll := container.NewVScroll(navTree.Widget())
+	split := container.NewHSplit(sidebarScroll, mainContainer)
+	split.SetOffset(0.2)
+
+	// Setup navigation callback — updates only the right panel
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
 		node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
@@ -95,7 +110,9 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 			log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
 			return
 		}
-		win.SetContent(newUI)
+		mainContainer.Objects = []fyne.CanvasObject{newUI}
+		mainContainer.Refresh()
+		navTree.SelectByVistaID(vID)
 	}
 
 	// 4. Load home screen from core database (pkg/ui)
@@ -116,7 +133,9 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 		return nil, fmt.Errorf("failed to compose home UI: %w", err)
 	}
 
-	win.SetContent(homeUI)
+	// Place home screen into the right panel and set the split as window content
+	mainContainer.Objects = []fyne.CanvasObject{homeUI}
+	win.SetContent(split)
 
 	a := &App{
 		Config:   cfg,

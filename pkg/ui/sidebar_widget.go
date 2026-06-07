@@ -7,11 +7,62 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// BuildNavTree transforms a flat []MenuItem slice into an interactive Fyne
-// widget.Tree. Leaf nodes with a non-empty VistaID trigger the package-level
-// Navigate function on selection. Branch nodes (structural containers) are
-// expanded/collapsed but do not navigate.
-func BuildNavTree(items []MenuItem) *widget.Tree {
+// NavTree wraps a Fyne widget.Tree with navigation metadata for bidirectional
+// sync. It maintains vistaID-to-nodeID and parent mappings needed to
+// programmatically select and expand tree nodes when navigation occurs
+// externally (e.g., via a button click).
+type NavTree struct {
+	tree        *widget.Tree
+	vistaToNode map[string]string // vistaID → menuItem.ID
+	parentOf    map[string]string // menuItem.ID → parent menuItem.ID
+	navigating  bool              // re-entrancy guard: true while programmatic SelectByVistaID is active
+}
+
+// Widget returns the underlying *widget.Tree for integration with Fyne layouts.
+func (nt *NavTree) Widget() *widget.Tree {
+	return nt.tree
+}
+
+// SelectByVistaID programmatically selects the tree node associated with the
+// given vistaID. It opens all ancestor branches (root→parent order) before
+// selecting the target node. If vistaID is empty or not found, it is a no-op.
+//
+// The navigating re-entrancy guard prevents the tree's OnSelected callback
+// from re-triggering Navigate when the selection is programmatic.
+func (nt *NavTree) SelectByVistaID(vistaID string) {
+	if vistaID == "" {
+		return
+	}
+	nodeID, ok := nt.vistaToNode[vistaID]
+	if !ok {
+		return
+	}
+
+	// Walk ancestor chain from target to root, then open root→parent
+	ancestors := []string{}
+	for cur := nodeID; cur != ""; {
+		pid := nt.parentOf[cur]
+		if pid != "" {
+			ancestors = append(ancestors, pid)
+		}
+		cur = pid
+	}
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		nt.tree.OpenBranch(widget.TreeNodeID(ancestors[i]))
+	}
+
+	nt.navigating = true
+	defer func() { nt.navigating = false }()
+	nt.tree.Select(widget.TreeNodeID(nodeID))
+}
+
+// BuildNavTree transforms a flat []MenuItem slice into a NavTree containing an
+// interactive Fyne widget.Tree. Leaf nodes with a non-empty VistaID trigger
+// the package-level Navigate function on selection. Branch nodes (structural
+// containers) are expanded/collapsed but do not navigate.
+//
+// The returned NavTree supports bidirectional sync via SelectByVistaID.
+func BuildNavTree(items []MenuItem) *NavTree {
 	// Build parent-to-children index, sorted by Orden then ID.
 	parentToChildren := make(map[string][]string)
 	idToItem := make(map[string]MenuItem)
@@ -65,7 +116,25 @@ func BuildNavTree(items []MenuItem) *widget.Tree {
 		},
 	)
 
+	navTree := &NavTree{
+		tree:        tree,
+		vistaToNode: make(map[string]string),
+		parentOf:    make(map[string]string),
+	}
+
+	for _, item := range items {
+		if item.VistaID != "" {
+			navTree.vistaToNode[item.VistaID] = item.ID
+		}
+		if item.PadreID != "" {
+			navTree.parentOf[item.ID] = item.PadreID
+		}
+	}
+
 	tree.OnSelected = func(uid widget.TreeNodeID) {
+		if navTree.navigating {
+			return
+		}
 		item, exists := idToItem[string(uid)]
 		if !exists {
 			return
@@ -82,5 +151,5 @@ func BuildNavTree(items []MenuItem) *widget.Tree {
 		}
 	}
 
-	return tree
+	return navTree
 }
