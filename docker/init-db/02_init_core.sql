@@ -89,6 +89,30 @@ VALUES ('query_runner', 'Consola SQL', 'SELECT 1',
   '[]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
+-- =====================================================================
+-- Menú de Navegación Jerárquico
+-- =====================================================================
+
+-- Tabla de menú de navegación (árbol jerárquico auto-referenciado)
+CREATE TABLE IF NOT EXISTS golemui.menu_navegacion (
+    id VARCHAR(100) PRIMARY KEY,
+    padre_id VARCHAR(100) REFERENCES golemui.menu_navegacion(id) ON DELETE CASCADE,
+    titulo VARCHAR(150) NOT NULL,
+    vista_id VARCHAR(100) REFERENCES golemui.vistas_consulta(id) ON DELETE SET NULL,
+    orden INTEGER DEFAULT 0 NOT NULL
+);
+
+-- Nodo raíz del menú
+INSERT INTO golemui.menu_navegacion (id, padre_id, titulo, vista_id, orden)
+VALUES ('nav_principal', NULL, 'Menú Principal', NULL, 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- Nodos hijos del menú principal
+INSERT INTO golemui.menu_navegacion (id, padre_id, titulo, vista_id, orden) VALUES
+('nav_home', 'nav_principal', 'Inicio', 'home', 1),
+('nav_transacciones', 'nav_principal', 'Transacciones', 'transacciones_list', 2),
+('nav_query_runner', 'nav_principal', 'Consola SQL', 'query_runner', 3)
+ON CONFLICT (id) DO NOTHING;
 
 -- Vistas personalizadas guardadas por los usuarios
 CREATE TABLE IF NOT EXISTS golemui.vistas_guardadas (
