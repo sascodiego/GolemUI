@@ -16,3 +16,7 @@ coverage.out
 *.session
 last.session
 
+# Local Pi runtime state
+.atl/
+golemui_bin
+context.md

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -25,6 +26,11 @@ type App struct {
 
 var initDB = db.InitDB
 
+var (
+	flagConfig = flag.String("config", "golemui_driver.lua", "Path to Lua configuration file")
+	flagView   = flag.String("view", "", "Override entry point view ID (overrides Lua config EntryPointViewID)")
+)
+
 func sanitizeLocale() {
 	lang := strings.TrimSpace(os.Getenv("LANG"))
 	lcAll := strings.TrimSpace(os.Getenv("LC_ALL"))
@@ -44,7 +50,7 @@ func sanitizeLocale() {
 	}
 }
 
-func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneApp fyne.App) (*App, error) {
+func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneApp fyne.App, viewOverride string) (*App, error) {
 	// 0. Sanitize locale before Fyne initialization
 	sanitizeLocale()
 
@@ -105,7 +111,10 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 	}
 
 	// 4. Load home screen from core database (pkg/ui)
-	vistaID := cfg.EntryPointViewID
+	vistaID := viewOverride
+	if vistaID == "" {
+		vistaID = cfg.EntryPointViewID
+	}
 	if vistaID == "" {
 		vistaID = "home"
 	}
@@ -140,9 +149,10 @@ func RunBootstrap(ctx context.Context, configPath string, runWindow bool, fyneAp
 }
 
 func main() {
+	flag.Parse()
 	ctx := context.Background()
-	log.Println("Starting GolemUI desktop client bootstrap...")
-	_, err := RunBootstrap(ctx, "golemui_driver.lua", true, nil)
+	log.Printf("Starting GolemUI — config: %s, view: %s", *flagConfig, *flagView)
+	_, err := RunBootstrap(ctx, *flagConfig, true, nil, *flagView)
 	if err != nil {
 		log.Fatalf("Bootstrap error: %v", err)
 	}

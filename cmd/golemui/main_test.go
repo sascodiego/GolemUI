@@ -99,7 +99,7 @@ func TestSanitizeLocale_BothValidUntouched(t *testing.T) {
 
 func TestRunBootstrap_MissingConfig(t *testing.T) {
 	ctx := context.Background()
-	_, err := RunBootstrap(ctx, "non_existent_config.lua", false, nil)
+	_, err := RunBootstrap(ctx, "non_existent_config.lua", false, nil, "")
 	if err == nil {
 		t.Error("expected error due to missing configuration file, got nil")
 	}
@@ -134,7 +134,7 @@ golemui_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	_, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	_, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if err == nil {
 		t.Fatal("expected database connection failure, got nil")
 	}
@@ -160,7 +160,7 @@ some_other_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	_, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	_, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if !strings.Contains(err.Error(), "golemui_driver table not found") {
 		t.Errorf("expected error to mention golemui_driver table, got: %v", err)
 	}
@@ -222,7 +222,7 @@ golemui_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if err != nil {
 		t.Fatalf("unexpected bootstrap error: %v", err)
 	}
@@ -306,7 +306,7 @@ golemui_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if err != nil {
 		t.Fatalf("expected bootstrap to succeed with default vistaID 'home', got error: %v", err)
 	}
@@ -374,7 +374,7 @@ golemui_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if err == nil {
 		t.Fatal("expected error when LoadScreen fails, got nil")
 	}
@@ -385,6 +385,204 @@ golemui_driver = {
 
 	if appInstance != nil {
 		t.Error("expected nil app instance on LoadScreen failure")
+	}
+}
+
+func TestRunBootstrap_ViewOverrideWins(t *testing.T) {
+	// Verifies that viewOverride="settings" wins over config's EntryPointViewID="dashboard"
+	oldInitDB := initDB
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+		ui.CorePool = nil
+	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	// Register layout query so the override vista "settings" can be loaded
+	coreMock.RegisterQuery(
+		ui.DefaultLayoutQuery,
+		[]string{"config_columnas"},
+		[][]any{{`{"area":"settings_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"title","component_ref":"label","label":"Settings Page"}]}`}},
+		nil,
+	)
+
+	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
+		return &db.DB{
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
+		}, nil
+	}
+
+	// Config sets EntryPointViewID = "dashboard", but viewOverride = "settings" should win
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password"
+    },
+    BusinessDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "negocio_production",
+        User = "postgres",
+        Password = "password"
+    },
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1",
+    EntryPointViewID = "dashboard"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_override.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "settings")
+	if err != nil {
+		t.Fatalf("expected bootstrap to succeed with viewOverride='settings', got error: %v", err)
+	}
+
+	if appInstance == nil {
+		t.Fatal("expected app instance, got nil")
+	}
+}
+
+func TestRunBootstrap_EmptyOverrideFallsThrough(t *testing.T) {
+	// Verifies that empty viewOverride falls through to config's EntryPointViewID
+	oldInitDB := initDB
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+		ui.CorePool = nil
+	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	layoutJSON := `{"area":"root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Transacciones"}]}`
+	coreMock.RegisterQuery(
+		ui.DefaultLayoutQuery,
+		[]string{"config_columnas"},
+		[][]any{{layoutJSON}},
+		nil,
+	)
+
+	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
+		return &db.DB{
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
+		}, nil
+	}
+
+	// Config sets EntryPointViewID = "transacciones_list", viewOverride="" → should use config value
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password"
+    },
+    BusinessDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "negocio_production",
+        User = "postgres",
+        Password = "password"
+    },
+    EntryPointViewID = "transacciones_list"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_config_vista.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
+	if err != nil {
+		t.Fatalf("expected bootstrap to succeed using config's EntryPointViewID, got error: %v", err)
+	}
+
+	if appInstance == nil {
+		t.Fatal("expected app instance, got nil")
+	}
+}
+
+func TestRunBootstrap_BothEmptyDefaultsHome(t *testing.T) {
+	// Verifies that when viewOverride="" and no EntryPointViewID in config, defaults to "home"
+	oldInitDB := initDB
+	defer func() {
+		initDB = oldInitDB
+		ui.BusinessPool = nil
+		ui.CorePool = nil
+	}()
+
+	coreMock := db.NewMockDBPool()
+	bizMock := db.NewMockDBPool()
+
+	coreMock.RegisterQuery(
+		ui.DefaultLayoutQuery,
+		[]string{"config_columnas"},
+		[][]any{{`{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"title","component_ref":"label","label":"Default Home"}]}`}},
+		nil,
+	)
+
+	initDB = func(ctx context.Context, coreCfg db.Config, bizCfg db.Config) (*db.DB, error) {
+		return &db.DB{
+			CorePool:     coreMock,
+			BusinessPool: bizMock,
+		}, nil
+	}
+
+	// Config WITHOUT EntryPointViewID, viewOverride="" → should default to "home"
+	content := `
+golemui_driver = {
+    UIDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "golemui_core",
+        User = "postgres",
+        Password = "password"
+    },
+    BusinessDB = {
+        Host = "localhost",
+        Port = 5432,
+        Database = "negocio_production",
+        User = "postgres",
+        Password = "password"
+    },
+    EntryPointQuery = "SELECT * FROM golemui.layouts LIMIT 1"
+}
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "golemui_driver_no_vista.lua")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	ctx := context.Background()
+	testApp := test.NewApp()
+
+	appInstance, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
+	if err != nil {
+		t.Fatalf("expected bootstrap to succeed with default vistaID 'home', got error: %v", err)
+	}
+
+	if appInstance == nil {
+		t.Fatal("expected app instance, got nil")
 	}
 }
 
@@ -456,7 +654,7 @@ golemui_driver = {
 	ctx := context.Background()
 	testApp := test.NewApp()
 
-	_, err := RunBootstrap(ctx, tmpFile, false, testApp)
+	_, err := RunBootstrap(ctx, tmpFile, false, testApp, "")
 	if err != nil {
 		t.Fatalf("expected successful bootstrap, got error: %v", err)
 	}
