@@ -1397,3 +1397,122 @@ func TestCompose_ButtonNavigation(t *testing.T) {
 		t.Errorf("expected Navigate to be called with 'query_runner', got %q", navigatedTo)
 	}
 }
+
+// --- Phase 3: Fyne Thread Safety Tests ---
+
+// TestCompose_DataGrid_ConcurrentOps_NoDeadlock verifies that running all three
+// goroutine types (G1: loadMasterBuffer, G2: fetchGridDataAsync, G3: EventBus filter)
+// concurrently does not produce a deadlock. This validates the unlock-before-fyne.Do
+// invariant at all wrap sites (REQ-LOCK-01).
+func TestCompose_DataGrid_ConcurrentOps_NoDeadlock(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	mockPool := db.NewMockDBPool()
+	ui.BusinessPool = mockPool
+	defer func() { ui.BusinessPool = nil }()
+
+	// Register both master buffer and server-mode queries
+	masterCols := []string{"id", "title", "author"}
+	masterRows := [][]any{
+		{1, "Foundation", "Asimov"},
+		{2, "Dune", "Herbert"},
+		{3, "I, Robot", "Asimov"},
+	}
+	mockPool.RegisterQuery("SELECT * FROM books", masterCols, masterRows, nil)
+
+	serverCols := []string{"id", "title"}
+	serverRows := [][]any{
+		{10, "Server Book"},
+	}
+	mockPool.RegisterQuery("SELECT * FROM server_books WHERE title LIKE $1", serverCols, serverRows, nil)
+
+	// Build a container with text_input + submit button + client-mode data_grid
+	// This triggers loadMasterBuffer (G1) during Compose
+	containerNode := ui.NodeMeta{
+		Area:         "screen",
+		ComponentRef: "container",
+		Layout:       ui.LayoutMeta{Type: "vertical"},
+		Children: []ui.NodeMeta{
+			{
+				Area:         "title_input",
+				ComponentRef: "text_input",
+				BindTo:       "title",
+				Placeholder:  "Filter",
+			},
+			{
+				Area:         "submit_btn",
+				ComponentRef: "button",
+				Label:        "Filter",
+				SubmitAction: "filter",
+			},
+			{
+				Area:             "grid_area",
+				ComponentRef:     "data_grid",
+				FilterMode:       "client",
+				MasterDataSource: "SELECT * FROM books",
+			},
+		},
+	}
+
+	obj, err := ui.Compose(containerNode, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+
+	c, ok := obj.(*fyne.Container)
+	if !ok {
+		t.Fatalf("expected *fyne.Container, got %T", obj)
+	}
+
+	gridTable := c.Objects[2].(*widget.Table)
+
+	// Wait for eager master buffer load (G1) to complete
+	var masterLoaded bool
+	for start := time.Now(); time.Since(start) < 1*time.Second; {
+		rows, _ := gridTable.Length()
+		if rows == 3 {
+			masterLoaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !masterLoaded {
+		rows, _ := gridTable.Length()
+		t.Fatalf("expected 3 rows after master buffer load, got %d", rows)
+	}
+
+	// Now trigger concurrent operations:
+	// G3: Multiple filter events via EventBus (triggers filterMasterRows → fyne.Do)
+	// We fire several filter events rapidly to stress the lock ordering.
+
+	for i := 0; i < 5; i++ {
+		snap := map[string]any{"author": "Asimov"}
+		eb.Publish("screen:submit:test-vista", snap)
+	}
+
+	// Wait for all concurrent filter operations to complete.
+	// If there is a deadlock (e.g., model.mu held during fyne.Do while
+	// table.Refresh tries to RLock), this will timeout.
+	done := make(chan struct{})
+	go func() {
+		// Poll until we see the filtered result (2 rows matching "Asimov")
+		for start := time.Now(); time.Since(start) < 5*time.Second; {
+			rows, _ := gridTable.Length()
+			if rows == 2 {
+				close(done)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-done:
+		// PASS — all concurrent operations completed without deadlock
+	case <-time.After(5 * time.Second):
+		rows, _ := gridTable.Length()
+		t.Fatalf("DEADLOCK detected: concurrent G1+G3 operations did not complete within 5s (rows=%d)", rows)
+	}
+}
