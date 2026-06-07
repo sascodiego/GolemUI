@@ -3,47 +3,34 @@ package lua
 import (
 	"fmt"
 	"os"
-	lua "github.com/yuin/gopher-lua"
+
+	"github.com/spf13/viper"
 )
 
 type ConfigConexion struct {
-	Host     string
-	Port     int
-	Database string
-	User     string
-	Password string
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Database string `mapstructure:"database"`
+	User     string `mapstructure:"user"`
+	Password string `mapstructure:"password"`
 }
 
 type BootstrapConfig struct {
-	UIDB             ConfigConexion
-	BusinessDB       ConfigConexion
-	EntryPointQuery  string
-	EntryPointViewID string
-	LayoutQuery      string
+	UIDB             ConfigConexion `mapstructure:"uidb"`
+	BusinessDB       ConfigConexion `mapstructure:"business_db"`
+	EntryPointQuery  string         `mapstructure:"entry_point_query"`
+	EntryPointViewID string         `mapstructure:"entry_point_view_id"`
+	LayoutQuery      string         `mapstructure:"layout_query"`
 }
 
-func getStringField(tbl *lua.LTable, key string) string {
-	val := tbl.RawGetString(key)
-	if val == lua.LNil {
-		return ""
+func validateConexion(c ConfigConexion, name string) error {
+	if c.Host == "" && c.Port == 0 && c.Database == "" && c.User == "" && c.Password == "" {
+		return fmt.Errorf("sub-table %s not found or invalid", name)
 	}
-	return val.String()
-}
-
-func getIntField(tbl *lua.LTable, key string) int {
-	val := tbl.RawGetString(key)
-	if val == lua.LNil {
-		return 0
+	if c.Host == "" || c.Port == 0 || c.Database == "" || c.User == "" {
+		return fmt.Errorf("missing required connection fields in %s", name)
 	}
-	if num, ok := val.(lua.LNumber); ok {
-		return int(num)
-	}
-	// Fallback attempt to parse string as int
-	var i int
-	if _, err := fmt.Sscanf(val.String(), "%d", &i); err == nil {
-		return i
-	}
-	return 0
+	return nil
 }
 
 func LoadConfig(path string) (*BootstrapConfig, error) {
@@ -51,65 +38,25 @@ func LoadConfig(path string) (*BootstrapConfig, error) {
 		return nil, fmt.Errorf("config file does not exist: %s", path)
 	}
 
-	L := lua.NewState()
-	defer L.Close()
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
 
-	if err := L.DoFile(path); err != nil {
-		return nil, fmt.Errorf("failed to execute Lua config: %w", err)
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	val := L.GetGlobal("golemui_driver")
-	if val.Type() != lua.LTTable {
-		return nil, fmt.Errorf("golemui_driver table not found or invalid in Lua config")
-	}
-	tbl := val.(*lua.LTable)
-
-	parseConexion := func(tableName string) (ConfigConexion, error) {
-		subVal := tbl.RawGetString(tableName)
-		if subVal.Type() != lua.LTTable {
-			return ConfigConexion{}, fmt.Errorf("sub-table %s not found or invalid", tableName)
-		}
-		subTbl := subVal.(*lua.LTable)
-
-		host := getStringField(subTbl, "Host")
-		port := getIntField(subTbl, "Port")
-		database := getStringField(subTbl, "Database")
-		user := getStringField(subTbl, "User")
-		password := getStringField(subTbl, "Password")
-
-		// Validate required fields
-		if host == "" || port == 0 || database == "" || user == "" {
-			return ConfigConexion{}, fmt.Errorf("missing required connection fields in %s", tableName)
-		}
-
-		return ConfigConexion{
-			Host:     host,
-			Port:     port,
-			Database: database,
-			User:     user,
-			Password: password,
-		}, nil
+	var cfg BootstrapConfig
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	uiDB, err := parseConexion("UIDB")
-	if err != nil {
+	if err := validateConexion(cfg.UIDB, "UIDB"); err != nil {
+		return nil, err
+	}
+	if err := validateConexion(cfg.BusinessDB, "BusinessDB"); err != nil {
 		return nil, err
 	}
 
-	bizDB, err := parseConexion("BusinessDB")
-	if err != nil {
-		return nil, err
-	}
-
-	entryPointQuery := getStringField(tbl, "EntryPointQuery")
-	entryPointViewID := getStringField(tbl, "EntryPointViewID")
-	layoutQuery := getStringField(tbl, "LayoutQuery")
-
-	return &BootstrapConfig{
-		UIDB:             uiDB,
-		BusinessDB:       bizDB,
-		EntryPointQuery:  entryPointQuery,
-		EntryPointViewID: entryPointViewID,
-		LayoutQuery:      layoutQuery,
-	}, nil
+	return &cfg, nil
 }
