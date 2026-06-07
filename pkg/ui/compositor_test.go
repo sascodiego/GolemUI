@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"GolemUI/pkg/db"
+	"GolemUI/pkg/eventbus"
+	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 	"github.com/jackc/pgx/v5"
-	"GolemUI/pkg/db"
-	"GolemUI/pkg/eventbus"
-	"GolemUI/pkg/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -170,7 +170,7 @@ func TestCorePool_DefaultsNil(t *testing.T) {
 
 func TestCompose_DataGrid_Success(t *testing.T) {
 	mockPool := db.NewMockDBPool()
-	
+
 	// Register mock query
 	cols := []string{"id", "title", "amount"}
 	rowsData := [][]any{
@@ -178,7 +178,7 @@ func TestCompose_DataGrid_Success(t *testing.T) {
 		{2, "Book B", 35.0},
 	}
 	mockPool.RegisterQuery("SELECT * FROM books", cols, rowsData, nil)
-	
+
 	// Inject the mock pool
 	ui.BusinessPool = mockPool
 	defer func() { ui.BusinessPool = nil }()
@@ -1169,6 +1169,202 @@ func TestCompose_TextArea(t *testing.T) {
 	}
 }
 
+// --- TDD RED: data_grid row selection publish ---
+
+// AC test: selecting a row in data_grid publishes header→value map to publish_selection
+func TestCompose_DataGrid_RowSelection_PublishesToSelectionChannel(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	var receivedPayload map[string]any
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	eb.Subscribe("publish_selection", func(ev eventbus.Event) {
+		if m, ok := ev.Payload.(map[string]any); ok {
+			receivedPayload = m
+		}
+		wg.Done()
+	})
+
+	mockPool := db.NewMockDBPool()
+	cols := []string{"id", "nombre", "monto"}
+	rowsData := [][]any{
+		{42, "Transaccion Test", 1000.50},
+	}
+	mockPool.RegisterQuery("SELECT id, nombre, monto FROM transacciones", cols, rowsData, nil)
+
+	ui.BusinessPool = mockPool
+	defer func() { ui.BusinessPool = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id, nombre, monto FROM transacciones",
+	}
+
+	obj, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for async data loading
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for data_grid to load data async")
+	}
+
+	// Simulate row selection
+	table.OnSelected(widget.TableCellID{Row: 0, Col: 0})
+
+	// Wait for async EventBus delivery
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for publish_selection event")
+	}
+
+	expected := map[string]any{"id": "42", "nombre": "Transaccion Test", "monto": "1000.5"}
+	if receivedPayload == nil {
+		t.Fatal("expected non-nil payload on publish_selection channel")
+	}
+	for k, v := range expected {
+		if receivedPayload[k] != v {
+			t.Errorf("expected payload[%q] = %q, got %q", k, v, receivedPayload[k])
+		}
+	}
+	if len(receivedPayload) != len(expected) {
+		t.Errorf("expected %d keys in payload, got %d", len(expected), len(receivedPayload))
+	}
+}
+
+// Edge case: out-of-bounds row selection publishes nothing
+func TestCompose_DataGrid_RowSelection_OutOfBounds_NoPublish(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	var published bool
+	eb.Subscribe("publish_selection", func(ev eventbus.Event) {
+		published = true
+	})
+
+	mockPool := db.NewMockDBPool()
+	cols := []string{"id"}
+	rowsData := [][]any{{1}}
+	mockPool.RegisterQuery("SELECT id FROM items", cols, rowsData, nil)
+
+	ui.BusinessPool = mockPool
+	defer func() { ui.BusinessPool = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id FROM items",
+	}
+
+	obj, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for data
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for data")
+	}
+
+	// Select out-of-bounds rows
+	table.OnSelected(widget.TableCellID{Row: -1, Col: 0})
+	table.OnSelected(widget.TableCellID{Row: 99, Col: 0})
+
+	time.Sleep(100 * time.Millisecond)
+
+	if published {
+		t.Error("expected NO publish for out-of-bounds row selection")
+	}
+}
+
+// Edge case: nil LocalEventBus does not panic on row selection
+func TestCompose_DataGrid_RowSelection_NilEventBus_NoPanic(t *testing.T) {
+	ui.LocalEventBus = nil
+
+	mockPool := db.NewMockDBPool()
+	cols := []string{"id"}
+	rowsData := [][]any{{1}}
+	mockPool.RegisterQuery("SELECT id FROM items", cols, rowsData, nil)
+
+	ui.BusinessPool = mockPool
+	defer func() { ui.BusinessPool = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id FROM items",
+	}
+
+	obj, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for data
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for data")
+	}
+
+	// Should not panic
+	table.OnSelected(widget.TableCellID{Row: 0, Col: 0})
+
+	time.Sleep(50 * time.Millisecond)
+}
+
 func TestCompose_ButtonNavigation(t *testing.T) {
 	var navigatedTo string
 	ui.Navigate = func(vistaID string) {
@@ -1201,5 +1397,3 @@ func TestCompose_ButtonNavigation(t *testing.T) {
 		t.Errorf("expected Navigate to be called with 'query_runner', got %q", navigatedTo)
 	}
 }
-
-
