@@ -11,6 +11,9 @@ coverage.out
 # IDEs
 .idea/
 .vscode/
+.pi/
+.pi-lens/
+
 
 # Sessions and temp files
 *.session
