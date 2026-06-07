@@ -12,14 +12,14 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
+	"GolemUI/pkg/config"
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/eventbus"
-	"GolemUI/pkg/lua"
 	"GolemUI/pkg/ui"
 )
 
 type App struct {
-	Config   *lua.BootstrapConfig
+	Config   *config.BootstrapConfig
 	DB       *db.DB
 	EventBus eventbus.EventBus
 	FyneApp  fyne.App
@@ -44,7 +44,7 @@ func sanitizeLocale() {
 	}
 }
 
-func RunBootstrap(ctx context.Context, cfg *lua.BootstrapConfig, runWindow bool, fyneApp fyne.App) (*App, error) {
+func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bool, fyneApp fyne.App) (*App, error) {
 	// 0. Sanitize locale before Fyne initialization
 	sanitizeLocale()
 
@@ -143,7 +143,7 @@ func main() {
 	ctx := context.Background()
 	log.Printf("Starting GolemUI — config: %s", configPath)
 
-	cfg, err := lua.LoadConfig(configPath)
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Bootstrap error: %v", err)
 	}
