@@ -100,19 +100,23 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	// Setup navigation callback — updates only the right panel
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
-		node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
-		if err != nil {
-			log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
-			return
-		}
-		newUI, err := ui.Compose(node, vID)
-		if err != nil {
-			log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
-			return
-		}
-		mainContainer.Objects = []fyne.CanvasObject{newUI}
-		mainContainer.Refresh()
-		navTree.SelectByVistaID(vID)
+		go func() {
+			node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
+			if err != nil {
+				log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
+				return
+			}
+			newUI, err := ui.Compose(node, vID)
+			if err != nil {
+				log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
+				return
+			}
+			fyne.Do(func() {
+				mainContainer.Objects = []fyne.CanvasObject{newUI}
+				mainContainer.Refresh()
+				navTree.SelectByVistaID(vID)
+			})
+		}()
 	}
 
 	// 4. Load home screen from core database (pkg/ui)

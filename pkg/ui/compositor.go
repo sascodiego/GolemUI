@@ -368,10 +368,12 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		model.rows = dataRows
 		model.mu.Unlock()
 
-		for i := 0; i < len(headers); i++ {
-			table.SetColumnWidth(i, 150)
-		}
-		table.Refresh()
+		fyne.Do(func() {
+			for i := 0; i < len(headers); i++ {
+				table.SetColumnWidth(i, 150)
+			}
+			table.Refresh()
+		})
 	}()
 }
 
@@ -395,7 +397,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	if len(snap) == 0 {
 		model.rows = model.masterRows
 		model.mu.Unlock()
-		table.Refresh()
+		fyne.Do(func() {
+			table.Refresh()
+		})
 		return
 	}
 
@@ -431,7 +435,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	model.rows = filtered
 	model.mu.Unlock()
 
-	table.Refresh()
+	fyne.Do(func() {
+		table.Refresh()
+	})
 }
 
 // containsIgnoreCase checks if substr is contained in s, case-insensitive.
@@ -530,10 +536,12 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		model.rows = dataRows
 		model.mu.Unlock()
 
-		for i := 0; i < len(headers); i++ {
-			table.SetColumnWidth(i, 150)
-		}
-		table.Refresh()
+		fyne.Do(func() {
+			for i := 0; i < len(headers); i++ {
+				table.SetColumnWidth(i, 150)
+			}
+			table.Refresh()
+		})
 	}()
 }
 
