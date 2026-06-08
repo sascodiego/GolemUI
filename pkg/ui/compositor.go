@@ -23,6 +23,7 @@ var Navigate func(vistaID string)
 
 type dataGridModel struct {
 	mu            sync.RWMutex
+	refreshMu     sync.Mutex // serializes all table.Refresh() calls to prevent concurrent widget mutations
 	headers       []string
 	columns       []string
 	rows          [][]string
@@ -60,29 +61,39 @@ type NodeMeta struct {
 }
 
 // Compose creates a per-screen ScreenState scoped to vistaID and delegates to composeWithState.
-func Compose(node NodeMeta, vistaID string) (fyne.CanvasObject, error) {
+// Returns the composed widget, a cleanup func that tears down EventBus subscriptions and
+// cancels in-flight goroutines, and any error. The cleanup func is always non-nil and safe
+// to call multiple times (idempotent via sync.Once for data_grid components).
+func Compose(node NodeMeta, vistaID string) (fyne.CanvasObject, func(), error) {
 	state := NewScreenState(vistaID)
-	return composeWithState(node, state)
+	obj, cleanup, err := composeWithState(node, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	return obj, cleanup, nil
 }
 
 // composeWithState recursively builds Fyne widgets, threading *ScreenState through all children.
-func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, error) {
+func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, func(), error) {
 	switch node.ComponentRef {
 	case "container":
 		var objects []fyne.CanvasObject
+		var cleanups []func()
 		for _, child := range node.Children {
-			cObj, err := composeWithState(child, state)
+			cObj, cCleanup, err := composeWithState(child, state)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			objects = append(objects, cObj)
+			cleanups = append(cleanups, cCleanup)
 		}
 
+		var containerObj fyne.CanvasObject
 		switch node.Layout.Type {
 		case "vertical":
-			return container.NewVBox(objects...), nil
+			containerObj = container.NewVBox(objects...)
 		case "horizontal":
-			return container.NewHBox(objects...), nil
+			containerObj = container.NewHBox(objects...)
 		case "grid":
 			var gap float64
 			if node.Layout.Gap != "" {
@@ -95,13 +106,20 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 				Rows:    node.Layout.Rows,
 				Gap:     float32(gap),
 			}
-			return container.New(lay, objects...), nil
+			containerObj = container.New(lay, objects...)
 		default:
-			return container.NewHBox(objects...), nil
+			containerObj = container.NewHBox(objects...)
 		}
 
+		cleanup := func() {
+			for _, c := range cleanups {
+				c()
+			}
+		}
+		return containerObj, cleanup, nil
+
 	case "label":
-		return widget.NewLabel(node.Label), nil
+		return widget.NewLabel(node.Label), func() {}, nil
 
 	case "text_input":
 		entry := widget.NewEntry()
@@ -112,7 +130,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 				state.Set(node.BindTo, text)
 			}
 		}
-		return entry, nil
+		return entry, func() {}, nil
 
 	case "text_area":
 		entry := widget.NewMultiLineEntry()
@@ -123,21 +141,21 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 				state.Set(node.BindTo, text)
 			}
 		}
-		return entry, nil
+		return entry, func() {}, nil
 
 	case "button":
 		if strings.HasPrefix(node.SubmitAction, "navigate:") && Navigate != nil {
 			targetVista := strings.TrimPrefix(node.SubmitAction, "navigate:")
 			return widget.NewButton(node.Label, func() {
 				Navigate(targetVista)
-			}), nil
+			}), func() {}, nil
 		}
 		if node.SubmitAction != "" && LocalEventBus != nil {
 			return widget.NewButton(node.Label, func() {
 				LocalEventBus.Publish(state.SubmitChannel(), state.Snapshot())
-			}), nil
+			}), func() {}, nil
 		}
-		return widget.NewButton(node.Label, func() {}), nil
+		return widget.NewButton(node.Label, func() {}), func() {}, nil
 
 	case "data_grid":
 		model := &dataGridModel{
@@ -281,12 +299,31 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, err
 			}
 		}
 
-		return table, nil
+		var once sync.Once
+		cleanup := func() {
+			once.Do(func() {
+				model.mu.Lock()
+				cancelFn := model.cancel
+				unsubFn := model.unsubscribe
+				model.cancel = nil
+				model.unsubscribe = nil
+				model.mu.Unlock()
+
+				if cancelFn != nil {
+					cancelFn()
+				}
+				if unsubFn != nil {
+					unsubFn()
+				}
+			})
+		}
+
+		return table, cleanup, nil
 
 	default:
 		log.Printf("Warning: Unrecognized component type %q at area %q", node.ComponentRef, node.Area)
 		fallback := widget.NewLabel(fmt.Sprintf("[Fallback: Unrecognized component type %q]", node.ComponentRef))
-		return fallback, nil
+		return fallback, func() {}, nil
 	}
 }
 
@@ -313,7 +350,8 @@ func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
 
 // loadMasterBuffer eagerly loads all data from MasterDataSource into the model's masterRows.
 func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table) {
-	if BusinessPool == nil {
+	pool := BusinessPool
+	if pool == nil {
 		log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot load master buffer for data_grid at area %q", node.Area)
 		return
 	}
@@ -323,7 +361,7 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 			log.Printf("[UI/DataGrid] Master buffer load cancelled before start for area %q", node.Area)
 			return
 		}
-		rows, err := BusinessPool.Query(ctx, node.MasterDataSource)
+		rows, err := pool.Query(ctx, node.MasterDataSource)
 		if err != nil {
 			log.Printf("[UI/DataGrid] Error loading master buffer %q: %v", node.MasterDataSource, err)
 			return
@@ -368,12 +406,12 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		model.rows = dataRows
 		model.mu.Unlock()
 
-		fyne.Do(func() {
-			for i := 0; i < len(headers); i++ {
-				table.SetColumnWidth(i, 150)
-			}
-			table.Refresh()
-		})
+		model.refreshMu.Lock()
+		for i := 0; i < len(headers); i++ {
+			table.SetColumnWidth(i, 150)
+		}
+		table.Refresh()
+		model.refreshMu.Unlock()
 	}()
 }
 
@@ -397,9 +435,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	if len(snap) == 0 {
 		model.rows = model.masterRows
 		model.mu.Unlock()
-		fyne.Do(func() {
-			table.Refresh()
-		})
+		model.refreshMu.Lock()
+		table.Refresh()
+		model.refreshMu.Unlock()
 		return
 	}
 
@@ -435,9 +473,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	model.rows = filtered
 	model.mu.Unlock()
 
-	fyne.Do(func() {
-		table.Refresh()
-	})
+	model.refreshMu.Lock()
+	table.Refresh()
+	model.refreshMu.Unlock()
 }
 
 // containsIgnoreCase checks if substr is contained in s, case-insensitive.
@@ -482,9 +520,10 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 	if query == "" {
 		return
 	}
+	pool := BusinessPool
 	log.Printf("[UI/DataGrid] Requesting data async for area %q. SQL: %q, Args: %+v", node.Area, query, args)
 	go func() {
-		if BusinessPool == nil {
+		if pool == nil {
 			log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
 			return
 		}
@@ -492,7 +531,7 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 			log.Printf("[UI/DataGrid] Query cancelled before start for area %q", node.Area)
 			return
 		}
-		rows, err := BusinessPool.Query(ctx, query, args...)
+		rows, err := pool.Query(ctx, query, args...)
 		if err != nil {
 			log.Printf("[UI/DataGrid] Error running query %q: %v", query, err)
 			return
@@ -536,12 +575,12 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		model.rows = dataRows
 		model.mu.Unlock()
 
-		fyne.Do(func() {
-			for i := 0; i < len(headers); i++ {
-				table.SetColumnWidth(i, 150)
-			}
-			table.Refresh()
-		})
+		model.refreshMu.Lock()
+		for i := 0; i < len(headers); i++ {
+			table.SetColumnWidth(i, 150)
+		}
+		table.Refresh()
+		model.refreshMu.Unlock()
 	}()
 }
 

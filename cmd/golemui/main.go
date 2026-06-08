@@ -98,24 +98,31 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	split.SetOffset(0.2)
 
 	// Setup navigation callback — updates only the right panel
+	var prevCleanup func()
+
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
 		go func() {
+			// Tear down previous screen before loading the new one
+			if prevCleanup != nil {
+				prevCleanup()
+				prevCleanup = nil
+			}
+
 			node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
 			if err != nil {
 				log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
 				return
 			}
-			newUI, err := ui.Compose(node, vID)
+			newUI, cleanup, err := ui.Compose(node, vID)
 			if err != nil {
 				log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
 				return
 			}
-			fyne.Do(func() {
-				mainContainer.Objects = []fyne.CanvasObject{newUI}
-				mainContainer.Refresh()
-				navTree.SelectByVistaID(vID)
-			})
+			prevCleanup = cleanup
+			mainContainer.Objects = []fyne.CanvasObject{newUI}
+			mainContainer.Refresh()
+			navTree.SelectByVistaID(vID)
 		}()
 	}
 
@@ -131,11 +138,12 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 		return nil, fmt.Errorf("failed to load screen %q: %w", vistaID, err)
 	}
 
-	homeUI, err := ui.Compose(homeNode, vistaID)
+	homeUI, homeCleanup, err := ui.Compose(homeNode, vistaID)
 	if err != nil {
 		dbPool.Close()
 		return nil, fmt.Errorf("failed to compose home UI: %w", err)
 	}
+	prevCleanup = homeCleanup
 
 	// Place home screen into the right panel and set the split as window content
 	mainContainer.Objects = []fyne.CanvasObject{homeUI}

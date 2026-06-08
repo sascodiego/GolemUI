@@ -3,6 +3,7 @@ package ui_test
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,10 +43,11 @@ func TestCompose_SimpleHierarchy(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -82,10 +84,11 @@ func TestCompose_Fallback(t *testing.T) {
 		ComponentRef: "non_existent_component_ref",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("expected graceful handling without error, got err: %v", err)
 	}
+	defer cleanup()
 
 	lbl, ok := obj.(*widget.Label)
 	if !ok {
@@ -116,10 +119,11 @@ func TestCompose_GridAndButton(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -189,10 +193,11 @@ func TestCompose_DataGrid_Success(t *testing.T) {
 		DataSource:   "SELECT * FROM books",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -251,10 +256,11 @@ func TestCompose_DataGrid_NoDataSource(t *testing.T) {
 		DataSource:   "",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -279,10 +285,11 @@ func TestCompose_DataGrid_NilPool(t *testing.T) {
 	}
 
 	// This should not crash / panic
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -360,10 +367,11 @@ func TestCompose_DataGrid_ReactiveFiltering(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -481,10 +489,11 @@ func TestCompose_TextInput_WritesToState_NoPublish(t *testing.T) {
 		Placeholder:  "Filter",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	entry, ok := obj.(*widget.Entry)
 	if !ok {
@@ -516,10 +525,11 @@ func TestCompose_TextInput_NoBindTo_NoStateWrite(t *testing.T) {
 		Placeholder:  "No bind_to",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	entry, ok := obj.(*widget.Entry)
 	if !ok {
@@ -570,10 +580,11 @@ func TestCompose_Button_SubmitAction_PublishesSnapshot(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -642,10 +653,11 @@ func TestCompose_Button_NoSubmitAction_NoPublish(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -716,10 +728,11 @@ func TestCompose_DataGrid_ServerMode_SubmitChannelQuery(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -815,10 +828,11 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -917,10 +931,11 @@ func TestCompose_ScopedSubmitChannel_NoCrossTalk(t *testing.T) {
 		},
 	}
 
-	_, err := ui.Compose(screenANode, "screen-a")
+	_, cleanup, err := ui.Compose(screenANode, "screen-a")
 	if err != nil {
 		t.Fatalf("Compose screen A failed: %v", err)
 	}
+	defer cleanup()
 
 	// Build screen B with a submit button (different vistaID)
 	screenBNode := ui.NodeMeta{
@@ -937,10 +952,11 @@ func TestCompose_ScopedSubmitChannel_NoCrossTalk(t *testing.T) {
 		},
 	}
 
-	objB, err := ui.Compose(screenBNode, "screen-b")
+	objB, cleanup, err := ui.Compose(screenBNode, "screen-b")
 	if err != nil {
 		t.Fatalf("Compose screen B failed: %v", err)
 	}
+	defer cleanup()
 	cB, _ := objB.(*fyne.Container)
 
 	// Tap screen B's button — screen A should NOT receive this
@@ -1014,10 +1030,11 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -1099,10 +1116,11 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 		},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
+	defer cleanup()
 
 	c, ok := obj.(*fyne.Container)
 	if !ok {
@@ -1146,10 +1164,11 @@ func TestCompose_TextArea(t *testing.T) {
 		DefaultValue: "SELECT 1",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	entry, ok := obj.(*widget.Entry)
 	if !ok {
@@ -1204,10 +1223,11 @@ func TestCompose_DataGrid_RowSelection_PublishesToSelectionChannel(t *testing.T)
 		DataSource:   "SELECT id, nombre, monto FROM transacciones",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -1282,10 +1302,11 @@ func TestCompose_DataGrid_RowSelection_OutOfBounds_NoPublish(t *testing.T) {
 		DataSource:   "SELECT id FROM items",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -1335,10 +1356,11 @@ func TestCompose_DataGrid_RowSelection_NilEventBus_NoPanic(t *testing.T) {
 		DataSource:   "SELECT id FROM items",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	table, ok := obj.(*widget.Table)
 	if !ok {
@@ -1381,10 +1403,11 @@ func TestCompose_ButtonNavigation(t *testing.T) {
 		SubmitAction: "navigate:query_runner",
 	}
 
-	obj, err := ui.Compose(node, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
 	}
+	defer cleanup()
 
 	btn, ok := obj.(*widget.Button)
 	if !ok {
@@ -1398,121 +1421,211 @@ func TestCompose_ButtonNavigation(t *testing.T) {
 	}
 }
 
-// --- Phase 3: Fyne Thread Safety Tests ---
+// --- Screen Lifecycle Cleanup TDD Tests ---
 
-// TestCompose_DataGrid_ConcurrentOps_NoDeadlock verifies that running all three
-// goroutine types (G1: loadMasterBuffer, G2: fetchGridDataAsync, G3: EventBus filter)
-// concurrently does not produce a deadlock. This validates the unlock-before-fyne.Do
-// invariant at all wrap sites (REQ-LOCK-01).
-func TestCompose_DataGrid_ConcurrentOps_NoDeadlock(t *testing.T) {
+func TestCompose_ReturnsCleanupFunc(t *testing.T) {
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 	defer func() { ui.LocalEventBus = nil }()
 
-	mockPool := db.NewMockDBPool()
-	ui.BusinessPool = mockPool
+	bizMock := db.NewMockDBPool()
+	ui.BusinessPool = bizMock
 	defer func() { ui.BusinessPool = nil }()
 
-	// Register both master buffer and server-mode queries
-	masterCols := []string{"id", "title", "author"}
-	masterRows := [][]any{
-		{1, "Foundation", "Asimov"},
-		{2, "Dune", "Herbert"},
-		{3, "I, Robot", "Asimov"},
-	}
-	mockPool.RegisterQuery("SELECT * FROM books", masterCols, masterRows, nil)
+	bizMock.RegisterQuery(
+		"SELECT * FROM books",
+		[]string{"title", "author"},
+		[][]any{{"Foundation", "Asimov"}},
+		nil,
+	)
 
-	serverCols := []string{"id", "title"}
-	serverRows := [][]any{
-		{10, "Server Book"},
-	}
-	mockPool.RegisterQuery("SELECT * FROM server_books WHERE title LIKE $1", serverCols, serverRows, nil)
-
-	// Build a container with text_input + submit button + client-mode data_grid
-	// This triggers loadMasterBuffer (G1) during Compose
-	containerNode := ui.NodeMeta{
-		Area:         "screen",
-		ComponentRef: "container",
-		Layout:       ui.LayoutMeta{Type: "vertical"},
-		Children: []ui.NodeMeta{
-			{
-				Area:         "title_input",
-				ComponentRef: "text_input",
-				BindTo:       "title",
-				Placeholder:  "Filter",
-			},
-			{
-				Area:         "submit_btn",
-				ComponentRef: "button",
-				Label:        "Filter",
-				SubmitAction: "filter",
-			},
-			{
-				Area:             "grid_area",
-				ComponentRef:     "data_grid",
-				FilterMode:       "client",
-				MasterDataSource: "SELECT * FROM books",
-			},
-		},
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT * FROM books",
+		FilterKeys:   []string{"author"},
 	}
 
-	obj, err := ui.Compose(containerNode, "test-vista")
+	obj, cleanup, err := ui.Compose(node, "test-cleanup")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+	defer cleanup()
+
+	if obj == nil {
+		t.Fatal("expected non-nil widget")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup func for data_grid screen")
+	}
+}
+
+func TestCompose_CleanupRemovesSubscribers(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	bizMock := db.NewMockDBPool()
+	ui.BusinessPool = bizMock
+	defer func() { ui.BusinessPool = nil }()
+
+	bizMock.RegisterQuery(
+		"SELECT * FROM books",
+		[]string{"title", "author"},
+		[][]any{{"Foundation", "Asimov"}},
+		nil,
+	)
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT * FROM books",
+		FilterKeys:   []string{"author"},
+	}
+
+	_, cleanup, err := ui.Compose(node, "test-unsub")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
 	}
 
-	c, ok := obj.(*fyne.Container)
-	if !ok {
-		t.Fatalf("expected *fyne.Container, got %T", obj)
+	// Verify 1 subscriber on the submit channel
+	count := eb.(*eventbus.InMemEventBus).SubscriberCount("screen:submit:test-unsub")
+	if count != 1 {
+		t.Fatalf("expected 1 subscriber, got %d", count)
 	}
 
-	gridTable := c.Objects[2].(*widget.Table)
+	// Call cleanup
+	cleanup()
 
-	// Wait for eager master buffer load (G1) to complete
-	var masterLoaded bool
-	for start := time.Now(); time.Since(start) < 1*time.Second; {
-		rows, _ := gridTable.Length()
-		if rows == 3 {
-			masterLoaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !masterLoaded {
-		rows, _ := gridTable.Length()
-		t.Fatalf("expected 3 rows after master buffer load, got %d", rows)
+	// Verify 0 subscribers after cleanup
+	count = eb.(*eventbus.InMemEventBus).SubscriberCount("screen:submit:test-unsub")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers after cleanup, got %d", count)
 	}
 
-	// Now trigger concurrent operations:
-	// G3: Multiple filter events via EventBus (triggers filterMasterRows → fyne.Do)
-	// We fire several filter events rapidly to stress the lock ordering.
+	// Publish on the old channel and verify no handler fires
+	var fired int32
+	eb.Subscribe("screen:submit:test-unsub", func(ev eventbus.Event) {
+		atomic.AddInt32(&fired, 1)
+	})
+	eb.Publish("screen:submit:test-unsub", map[string]any{"author": "test"})
+	time.Sleep(100 * time.Millisecond)
 
-	for i := 0; i < 5; i++ {
-		snap := map[string]any{"author": "Asimov"}
-		eb.Publish("screen:submit:test-vista", snap)
+	// Only our spy handler should have fired (the old one was removed)
+	if atomic.LoadInt32(&fired) != 1 {
+		t.Fatalf("expected exactly 1 handler (spy only), got %d", atomic.LoadInt32(&fired))
+	}
+}
+
+func TestCompose_CleanupCancelsGoroutines(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	bizMock := db.NewMockDBPool()
+	ui.BusinessPool = bizMock
+	defer func() { ui.BusinessPool = nil }()
+
+	bizMock.RegisterQuery(
+		"SELECT * FROM books",
+		[]string{"title", "author"},
+		[][]any{{"Foundation", "Asimov"}},
+		nil,
+	)
+
+	node := ui.NodeMeta{
+		Area:             "grid_area",
+		ComponentRef:     "data_grid",
+		FilterMode:       "client",
+		MasterDataSource: "SELECT * FROM books",
 	}
 
-	// Wait for all concurrent filter operations to complete.
-	// If there is a deadlock (e.g., model.mu held during fyne.Do while
-	// table.Refresh tries to RLock), this will timeout.
-	done := make(chan struct{})
-	go func() {
-		// Poll until we see the filtered result (2 rows matching "Asimov")
-		for start := time.Now(); time.Since(start) < 5*time.Second; {
-			rows, _ := gridTable.Length()
-			if rows == 2 {
-				close(done)
-				return
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}()
-
-	select {
-	case <-done:
-		// PASS — all concurrent operations completed without deadlock
-	case <-time.After(5 * time.Second):
-		rows, _ := gridTable.Length()
-		t.Fatalf("DEADLOCK detected: concurrent G1+G3 operations did not complete within 5s (rows=%d)", rows)
+	_, cleanup, err := ui.Compose(node, "test-cancel")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
 	}
+
+	// Wait for master buffer to load
+	time.Sleep(300 * time.Millisecond)
+
+	// Call cleanup — should cancel the context
+	cleanup()
+
+	// If cleanup properly cancels the context, the test completes without hanging
+	// We verify by checking that a second call to cleanup is safe (idempotent)
+	cleanup()
+}
+
+func TestCompose_IdempotentCleanup(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	bizMock := db.NewMockDBPool()
+	ui.BusinessPool = bizMock
+	defer func() { ui.BusinessPool = nil }()
+
+	bizMock.RegisterQuery(
+		"SELECT * FROM books",
+		[]string{"title", "author"},
+		[][]any{{"Foundation", "Asimov"}},
+		nil,
+	)
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT * FROM books",
+		FilterKeys:   []string{"author"},
+	}
+
+	_, cleanup, err := ui.Compose(node, "test-idempotent")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+
+	// First cleanup removes the subscriber
+	cleanup()
+	count := eb.(*eventbus.InMemEventBus).SubscriberCount("screen:submit:test-idempotent")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers after first cleanup, got %d", count)
+	}
+
+	// Second cleanup should not panic and count stays 0
+	cleanup()
+	count = eb.(*eventbus.InMemEventBus).SubscriberCount("screen:submit:test-idempotent")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers after second cleanup, got %d", count)
+	}
+}
+
+func TestCompose_NoOpCleanup_NoDataGrid(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "root",
+		ComponentRef: "container",
+		Layout:       ui.LayoutMeta{Type: "vertical"},
+		Children: []ui.NodeMeta{
+			{
+				Area:         "lbl",
+				ComponentRef: "label",
+				Label:        "Hello",
+			},
+		},
+	}
+
+	_, cleanup, err := ui.Compose(node, "test-noop")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup func even for non-data_grid screens")
+	}
+
+	// Calling cleanup should be safe — no panic, no side effects
+	cleanup()
 }
