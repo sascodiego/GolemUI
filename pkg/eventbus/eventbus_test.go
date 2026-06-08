@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+// SubscriberCount returns the number of active subscribers for a channel.
+// For testing only — requires the bus to be *InMemEventBus.
+func subscriberCount(t testing.TB, bus EventBus, channel string) int {
+	t.Helper()
+	b, ok := bus.(*InMemEventBus)
+	if !ok {
+		t.Fatalf("expected *InMemEventBus, got %T", bus)
+	}
+	return b.SubscriberCount(channel)
+}
+
 func TestEventBus_HappyPath(t *testing.T) {
 	bus := NewEventBus()
 
