@@ -4,20 +4,21 @@ CREATE SCHEMA IF NOT EXISTS golemui;
 -- Catálogo de componentes de UI estándar
 CREATE TABLE IF NOT EXISTS golemui.componentes (
     id VARCHAR(50) PRIMARY KEY,
-    descripcion TEXT NOT NULL
+    descripcion TEXT NOT NULL,
+    default_column_width VARCHAR(20)  -- Layer 2 default width for grid components
 );
 
-INSERT INTO golemui.componentes (id, descripcion) VALUES
-('click_button', 'Botón de ejecución transaccional'),
-('text_input', 'Input de texto de una sola línea'),
-('text_area', 'Input de texto multilínea'),
-('numeric_stepper', 'Selector numérico con límites definidos'),
-('barcode_reader', 'Control optimizado para entrada de escáneres rápidos'),
-('data_grid', 'Grilla estructurada para visualización y selección de filas'),
-('dropdown_select', 'Selector de opciones basado en claves foráneas'),
-('date_picker', 'Selector gráfico de fechas calendarizadas'),
-('checkbox_toggle', 'Selector booleano interactivo'),
-('numeric_keypad', 'Teclado numérico táctil para ingreso rápido de datos')
+INSERT INTO golemui.componentes (id, descripcion, default_column_width) VALUES
+('click_button',     'Botón de ejecución transaccional',                     NULL),
+('text_input',       'Input de texto de una sola línea',                     NULL),
+('text_area',        'Input de texto multilínea',                             NULL),
+('numeric_stepper',  'Selector numérico con límites definidos',              NULL),
+('barcode_reader',   'Control optimizado para entrada de escáneres rápidos', NULL),
+('data_grid',        'Grilla estructurada para visualización y selección de filas', '150px'),
+('dropdown_select',  'Selector de opciones basado en claves foráneas',       NULL),
+('date_picker',      'Selector gráfico de fechas calendarizadas',            NULL),
+('checkbox_toggle',  'Selector booleano interactivo',                        NULL),
+('numeric_keypad',   'Teclado numérico táctil para ingreso rápido de datos', NULL)
 ON CONFLICT (id) DO NOTHING;
 
 -- Sistema de Diseño Semántico (Semantic Design Tokens)
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS golemui.mapeo_interfaz (
     label VARCHAR(150),
     placeholder VARCHAR(250),
     validation VARCHAR(250),
+    column_width VARCHAR(20),  -- Layer 3 per-column width override
     PRIMARY KEY (origen_id, columna_fisica)
 );
 
