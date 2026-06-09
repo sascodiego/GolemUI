@@ -9,6 +9,9 @@ import (
 // Actual channels are: "screen:submit:<vistaID>"
 const SubmitChannelPrefix = "screen:submit"
 
+var PublishWG sync.WaitGroup
+var SynchronousPublish bool
+
 type Event struct {
 	Channel string
 	Payload interface{}
@@ -76,6 +79,14 @@ func (b *InMemEventBus) Publish(channel string, payload interface{}) {
 
 	for _, handler := range subs {
 		h := handler
-		go h(event)
+		if SynchronousPublish {
+			h(event)
+		} else {
+			PublishWG.Add(1)
+			go func() {
+				defer PublishWG.Done()
+				h(event)
+			}()
+		}
 	}
 }

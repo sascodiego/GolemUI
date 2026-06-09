@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -30,6 +31,48 @@ type App struct {
 }
 
 var initDB = db.InitDB
+
+// parseNavigateTarget splits a vistaID string into a clean screen ID and
+// optional query parameters. Returns the clean vistaID and a map of parsed
+// key-value pairs (URL-decoded). Returns (vID, nil) if no query string.
+func parseNavigateTarget(vID string) (string, map[string]string) {
+	idx := strings.Index(vID, "?")
+	if idx < 0 {
+		return vID, nil
+	}
+	cleanID := vID[:idx]
+	if cleanID == "" {
+		return vID, nil // malformed — treat as plain vistaID
+	}
+	rawQuery := vID[idx+1:]
+	if rawQuery == "" {
+		return cleanID, nil
+	}
+	params := make(map[string]string)
+	for _, pair := range strings.Split(rawQuery, "&") {
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		key, err := url.QueryUnescape(kv[0])
+		if err != nil {
+			key = kv[0] // fallback to raw key
+		}
+		if len(kv) == 1 {
+			params[key] = ""
+		} else {
+			val, err := url.QueryUnescape(kv[1])
+			if err != nil {
+				val = kv[1] // fallback to raw value
+			}
+			params[key] = val
+		}
+	}
+	if len(params) == 0 {
+		return cleanID, nil
+	}
+	return cleanID, params
+}
 
 func sanitizeLocale() {
 	lang := strings.TrimSpace(os.Getenv("LANG"))
@@ -108,7 +151,11 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
+		ui.NavigateWG.Add(1)
 		go func() {
+			// Parse query string
+			cleanVistaID, queryParams := parseNavigateTarget(vID)
+
 			// Tear down previous screen before loading the new one
 			cleanupMu.Lock()
 			if prevCleanup != nil {
@@ -117,14 +164,23 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 			}
 			cleanupMu.Unlock()
 
-			node, err := ui.LoadScreen(ctx, dbPool.CorePool, vID, cfg.LayoutQuery)
+			node, err := ui.LoadScreen(ctx, dbPool.CorePool, cleanVistaID, cfg.LayoutQuery)
 			if err != nil {
-				log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
+				log.Printf("[UI/Navigation] Error loading screen %q: %v", cleanVistaID, err)
+				ui.NavigateWG.Done()
 				return
 			}
-			newUI, cleanup, err := ui.Compose(node, vID)
+
+			var newUI fyne.CanvasObject
+			var cleanup func()
+			if queryParams != nil {
+				newUI, cleanup, err = ui.ComposeWithParams(node, cleanVistaID, queryParams)
+			} else {
+				newUI, cleanup, err = ui.Compose(node, cleanVistaID)
+			}
 			if err != nil {
-				log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
+				log.Printf("[UI/Navigation] Error composing screen %q: %v", cleanVistaID, err)
+				ui.NavigateWG.Done()
 				return
 			}
 
@@ -135,7 +191,8 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 			fyne.Do(func() {
 				mainContainer.Objects = []fyne.CanvasObject{newUI}
 				mainContainer.Refresh()
-				navTree.SelectByVistaID(vID)
+				navTree.SelectByVistaID(cleanVistaID)
+				ui.NavigateWG.Done()
 			})
 		}()
 	}
@@ -171,16 +228,17 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 		Window:   win,
 	}
 
+	win.SetOnClosed(func() {
+		cleanupMu.Lock()
+		if prevCleanup != nil {
+			prevCleanup()
+			prevCleanup = nil
+		}
+		cleanupMu.Unlock()
+		dbPool.Close()
+	})
+
 	if runWindow {
-		win.SetOnClosed(func() {
-			cleanupMu.Lock()
-			if prevCleanup != nil {
-				prevCleanup()
-				prevCleanup = nil
-			}
-			cleanupMu.Unlock()
-			dbPool.Close()
-		})
 		win.ShowAndRun()
 	}
 

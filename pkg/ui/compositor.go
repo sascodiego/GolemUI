@@ -13,6 +13,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +29,9 @@ var DS DataSource
 var CWR ColumnWidthResolver
 var LocalEventBus eventbus.EventBus
 var Navigate func(vistaID string)
+var NavigateWG sync.WaitGroup
+var UIUpdateWG sync.WaitGroup
+var SynchronousGridLoad bool
 
 const defaultGridColWidth float32 = 150
 
@@ -51,22 +56,23 @@ type LayoutMeta struct {
 }
 
 type NodeMeta struct {
-	Area             string     `json:"area"`
-	ComponentRef     string     `json:"component_ref"`
-	Label            string     `json:"label,omitempty"`
-	Placeholder      string     `json:"placeholder,omitempty"`
-	DefaultValue     string     `json:"default_value,omitempty"`
-	Min              float64    `json:"min,omitempty"`
-	Max              float64    `json:"max,omitempty"`
-	Validation       string     `json:"validation,omitempty"`
-	DataSource       string     `json:"data_source,omitempty"`
-	SubmitAction     string     `json:"submit_action,omitempty"`
-	BindTo           string     `json:"bind_to,omitempty"`
-	FilterMode       string     `json:"filter_mode,omitempty"`
-	MasterDataSource string     `json:"master_data_source,omitempty"`
-	FilterKeys       []string   `json:"filter_keys,omitempty"`
-	Layout           LayoutMeta `json:"layout,omitempty"`
-	Children         []NodeMeta `json:"children,omitempty"`
+	Area             string            `json:"area"`
+	ComponentRef     string            `json:"component_ref"`
+	Label            string            `json:"label,omitempty"`
+	Placeholder      string            `json:"placeholder,omitempty"`
+	DefaultValue     string            `json:"default_value,omitempty"`
+	Min              float64           `json:"min,omitempty"`
+	Max              float64           `json:"max,omitempty"`
+	Validation       string            `json:"validation,omitempty"`
+	DataSource       string            `json:"data_source,omitempty"`
+	SubmitAction     string            `json:"submit_action,omitempty"`
+	BindTo           string            `json:"bind_to,omitempty"`
+	FilterMode       string            `json:"filter_mode,omitempty"`
+	MasterDataSource string            `json:"master_data_source,omitempty"`
+	FilterKeys       []string          `json:"filter_keys,omitempty"`
+	ParamMapping     map[string]string `json:"param_mapping,omitempty"`
+	Layout           LayoutMeta        `json:"layout,omitempty"`
+	Children         []NodeMeta        `json:"children,omitempty"`
 }
 
 // Compose creates a per-screen ScreenState scoped to vistaID and delegates to composeWithState.
@@ -80,6 +86,21 @@ func Compose(node NodeMeta, vistaID string) (fyne.CanvasObject, func(), error) {
 		return nil, nil, err
 	}
 	return obj, cleanup, nil
+}
+
+// ComposeWithParams creates a ScreenState, preloads query parameters, then
+// composes the widget tree. This is the entry point for parameter-driven
+// navigation. Preserves Compose's signature for backward compatibility.
+func ComposeWithParams(node NodeMeta, vistaID string, params map[string]string) (fyne.CanvasObject, func(), error) {
+	state := NewScreenState(vistaID)
+	if len(params) > 0 {
+		anyMap := make(map[string]any, len(params))
+		for k, v := range params {
+			anyMap[k] = v
+		}
+		state.Preload(anyMap)
+	}
+	return composeWithState(node, state)
 }
 
 // composeWithState recursively builds Fyne widgets, threading *ScreenState through all children.
@@ -145,8 +166,10 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 				return
 			}
 			resolved := renderTemplate(tmpl, payload)
+			UIUpdateWG.Add(1)
 			fyne.Do(func() {
 				label.SetText(resolved)
+				UIUpdateWG.Done()
 			})
 		})
 
@@ -182,18 +205,29 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 		return entry, func() {}, nil
 
 	case "button":
+		btn := widget.NewButton(node.Label, nil)
+
+		// Branch 1: Reactive navigation button (Spec 018)
 		if strings.HasPrefix(node.SubmitAction, "navigate:") && Navigate != nil {
+			if node.DataSource != "" && LocalEventBus != nil {
+				return composeReactiveNavButton(node, btn)
+			}
+			// Branch 2: Static navigation button (existing)
 			targetVista := strings.TrimPrefix(node.SubmitAction, "navigate:")
-			return widget.NewButton(node.Label, func() {
+			btn.OnTapped = func() {
 				Navigate(targetVista)
-			}), func() {}, nil
+			}
+			return btn, func() {}, nil
 		}
+		// Branch 3: Submit button (existing)
 		if node.SubmitAction != "" && LocalEventBus != nil {
-			return widget.NewButton(node.Label, func() {
+			btn.OnTapped = func() {
 				LocalEventBus.Publish(state.SubmitChannel(), state.Snapshot())
-			}), func() {}, nil
+			}
+			return btn, func() {}, nil
 		}
-		return widget.NewButton(node.Label, func() {}), func() {}, nil
+		// Branch 4: Inert button (existing)
+		return btn, func() {}, nil
 
 	case "data_grid":
 		model := &dataGridModel{
@@ -375,9 +409,8 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 	}
 	cwr := CWR
 	log.Printf("[UI/DataGrid] Requesting master buffer eagerly for area %q. Source: %q", node.Area, node.MasterDataSource)
-	model.wg.Add(1)
-	go func() {
-		defer model.wg.Done()
+
+	fn := func() {
 		if err := ctx.Err(); err != nil {
 			log.Printf("[UI/DataGrid] Master buffer load cancelled before start for area %q", node.Area)
 			return
@@ -409,7 +442,19 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 			}
 			table.Refresh()
 		})
-	}()
+	}
+
+	if SynchronousGridLoad {
+		fn()
+	} else {
+		model.wg.Add(1)
+		UIUpdateWG.Add(1)
+		go func() {
+			defer model.wg.Done()
+			defer UIUpdateWG.Done()
+			fn()
+		}()
+	}
 }
 
 // filterMasterRows applies client-side filtering on the master buffer.
@@ -484,6 +529,99 @@ func formatCellValue(val any) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", val)
+}
+
+// buildQueryParams resolves param_mapping against a selection payload and
+// returns a URL-encoded query string (e.g. "id=42&type=debit").
+// Invalid or nil paths are skipped. Output is sorted for deterministic order.
+func buildQueryParams(selection map[string]any, mapping map[string]string) string {
+	var parts []string
+	for key, path := range mapping {
+		val := resolvePath(selection, path)
+		if val == nil {
+			continue
+		}
+		encoded := url.QueryEscape(fmt.Sprintf("%v", val))
+		parts = append(parts, url.QueryEscape(key)+"="+encoded)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "&")
+}
+
+// composeReactiveNavButton creates a button that:
+//  1. Starts disabled
+//  2. Subscribes to a selection channel via DataSource
+//  3. Enables/disables based on selection events
+//  4. On click: resolves param_mapping, builds query string, calls Navigate
+func composeReactiveNavButton(node NodeMeta, btn *widget.Button) (fyne.CanvasObject, func(), error) {
+	// 1. Initial state: disabled
+	btn.Disable()
+
+	// 2. Parse target vista from submit_action
+	targetVista := strings.TrimPrefix(node.SubmitAction, "navigate:")
+
+	// 3. Resolve selection channel from DataSource
+	channel := parseChannelName(node.DataSource)
+
+	// 4. Store last selection for click handler
+	var lastSelection map[string]any
+	var selMu sync.Mutex
+
+	// 5. Subscribe to selection channel
+	subID := LocalEventBus.Subscribe(channel, func(ev eventbus.Event) {
+		payload, ok := ev.Payload.(map[string]any)
+		if !ok || len(payload) == 0 {
+			// Deselection or invalid payload → disable
+			selMu.Lock()
+			lastSelection = nil
+			selMu.Unlock()
+			UIUpdateWG.Add(1)
+			fyne.Do(func() {
+				btn.Disable()
+				UIUpdateWG.Done()
+			})
+			return
+		}
+		// Valid selection → enable and store
+		selMu.Lock()
+		lastSelection = payload
+		selMu.Unlock()
+		UIUpdateWG.Add(1)
+		fyne.Do(func() {
+			btn.Enable()
+			UIUpdateWG.Done()
+		})
+	})
+
+	// 6. Click handler: resolve param_mapping, build query string
+	btn.OnTapped = func() {
+		selMu.Lock()
+		sel := lastSelection
+		selMu.Unlock()
+
+		if sel == nil {
+			return // no selection — button should be disabled, but guard anyway
+		}
+
+		target := targetVista
+		if len(node.ParamMapping) > 0 {
+			params := buildQueryParams(sel, node.ParamMapping)
+			if len(params) > 0 {
+				target = target + "?" + params
+			}
+		}
+		Navigate(target)
+	}
+
+	// 7. Cleanup: unsubscribe
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			LocalEventBus.Unsubscribe(channel, subID)
+		})
+	}
+
+	return btn, cleanup, nil
 }
 
 // containsIgnoreCase checks if substr is contained in s, case-insensitive.
@@ -609,9 +747,8 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 	}
 	cwr := CWR
 	log.Printf("[UI/DataGrid] Requesting data async for area %q. Source: %q, Args: %+v", node.Area, query, args)
-	model.wg.Add(1)
-	go func() {
-		defer model.wg.Done()
+
+	fn := func() {
 		if err := ctx.Err(); err != nil {
 			log.Printf("[UI/DataGrid] Query cancelled before start for area %q", node.Area)
 			return
@@ -642,7 +779,19 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 			}
 			table.Refresh()
 		})
-	}()
+	}
+
+	if SynchronousGridLoad {
+		fn()
+	} else {
+		model.wg.Add(1)
+		UIUpdateWG.Add(1)
+		go func() {
+			defer model.wg.Done()
+			defer UIUpdateWG.Done()
+			fn()
+		}()
+	}
 }
 
 // resolveWidth determines the pixel width for a data grid column.
