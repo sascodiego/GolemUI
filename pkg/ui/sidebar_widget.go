@@ -2,6 +2,7 @@ package ui
 
 import (
 	"sort"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
@@ -15,7 +16,7 @@ type NavTree struct {
 	tree        *widget.Tree
 	vistaToNode map[string]string // vistaID → menuItem.ID
 	parentOf    map[string]string // menuItem.ID → parent menuItem.ID
-	navigating  bool              // re-entrancy guard: true while programmatic SelectByVistaID is active
+	navigating  atomic.Bool       // re-entrancy guard: true while programmatic SelectByVistaID is active
 }
 
 // Widget returns the underlying *widget.Tree for integration with Fyne layouts.
@@ -51,8 +52,8 @@ func (nt *NavTree) SelectByVistaID(vistaID string) {
 		nt.tree.OpenBranch(widget.TreeNodeID(ancestors[i]))
 	}
 
-	nt.navigating = true
-	defer func() { nt.navigating = false }()
+	nt.navigating.Store(true)
+	defer func() { nt.navigating.Store(false) }()
 	nt.tree.Select(widget.TreeNodeID(nodeID))
 }
 
@@ -132,7 +133,7 @@ func BuildNavTree(items []MenuItem) *NavTree {
 	}
 
 	tree.OnSelected = func(uid widget.TreeNodeID) {
-		if navTree.navigating {
+		if navTree.navigating.Load() {
 			return
 		}
 		item, exists := idToItem[string(uid)]

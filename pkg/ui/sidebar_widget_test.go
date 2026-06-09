@@ -253,6 +253,31 @@ func TestNavTree_WidgetReturnsTree(t *testing.T) {
 	}
 }
 
+// --- T-ATOMIC-01: Navigating initial state (zero-value guarantee) ---
+
+// TestNavigating_InitialState verifies that a freshly constructed NavTree has
+// navigating=false (the atomic.Bool zero-value). A leaf with a VistaID is
+// selected via OnSelected — if navigating were true, Navigate would be suppressed.
+func TestNavigating_InitialState(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "leaf", PadreID: "", Titulo: "Leaf", VistaID: "home", Orden: 0},
+	}
+
+	var navigated bool
+	ui.Navigate = func(vistaID string) { navigated = true }
+	defer func() { ui.Navigate = nil }()
+
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
+
+	// Fresh NavTree: navigating should be false, so OnSelected proceeds to Navigate.
+	tree.OnSelected("leaf")
+
+	if !navigated {
+		t.Error("expected Navigate to be called on fresh NavTree (navigating should be false)")
+	}
+}
+
 // --- T-1.4: SelectByVistaID tests ---
 
 // TestSelectByVistaID_ValidSelectsNode verifies that SelectByVistaID correctly
