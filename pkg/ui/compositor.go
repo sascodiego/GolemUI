@@ -128,7 +128,36 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 		return containerObj, cleanup, nil
 
 	case "label":
-		return widget.NewLabel(node.Label), func() {}, nil
+		label := widget.NewLabel(node.Label)
+
+		if node.DataSource == "" || LocalEventBus == nil {
+			return label, func() {}, nil
+		}
+
+		channel := parseChannelName(node.DataSource)
+		log.Printf("[UI/Label] Subscribing label at area %q to channel %q", node.Area, channel)
+
+		tmpl := node.Label
+		subID := LocalEventBus.Subscribe(channel, func(ev eventbus.Event) {
+			payload, ok := ev.Payload.(map[string]any)
+			if !ok {
+				log.Printf("[UI/Label] Warning: payload on channel %q is not map[string]any, skipping update", channel)
+				return
+			}
+			resolved := renderTemplate(tmpl, payload)
+			fyne.Do(func() {
+				label.SetText(resolved)
+			})
+		})
+
+		var once sync.Once
+		cleanup := func() {
+			once.Do(func() {
+				LocalEventBus.Unsubscribe(channel, subID)
+			})
+		}
+
+		return label, cleanup, nil
 
 	case "text_input":
 		entry := widget.NewEntry()
@@ -482,6 +511,80 @@ func caseInsensitiveEqual(a, b string) bool {
 		}
 	}
 	return true
+}
+
+// resolvePath navigates a map[string]any hierarchy using a dot-separated path string.
+// Returns the value at the path, or nil if any segment is missing or non-navigable.
+// Maps-only: array index access is not supported.
+func resolvePath(data any, path string) any {
+	if data == nil || path == "" {
+		return nil
+	}
+
+	current := data
+	parts := strings.Split(path, ".")
+
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		val, exists := m[part]
+		if !exists {
+			return nil
+		}
+		current = val
+	}
+
+	return current
+}
+
+// renderTemplate processes a template string containing {token} placeholders.
+// Each token's inner path is resolved against data via resolvePath.
+// Unresolved tokens are preserved as their original literal text.
+// parseChannelName extracts the EventBus channel name from a DataSource value.
+// If the value starts with "event:", the prefix is stripped. Otherwise the value is used as-is.
+func parseChannelName(dataSource string) string {
+	if strings.HasPrefix(dataSource, "event:") {
+		return strings.TrimPrefix(dataSource, "event:")
+	}
+	return dataSource
+}
+
+func renderTemplate(tmpl string, data map[string]any) string {
+	var result strings.Builder
+	i := 0
+
+	for i < len(tmpl) {
+		if tmpl[i] == '{' {
+			closeIdx := strings.IndexByte(tmpl[i+1:], '}')
+			if closeIdx == -1 {
+				// No closing brace — write remaining as literal
+				result.WriteString(tmpl[i:])
+				break
+			}
+			closeIdx += i + 1 // absolute index of '}'
+
+			path := strings.TrimSpace(tmpl[i+1 : closeIdx])
+			if path == "" {
+				// Empty path — preserve literal token
+				result.WriteString(tmpl[i : closeIdx+1])
+			} else {
+				value := resolvePath(data, path)
+				if value != nil {
+					result.WriteString(fmt.Sprintf("%v", value))
+				} else {
+					result.WriteString(tmpl[i : closeIdx+1]) // preserve literal
+				}
+			}
+			i = closeIdx + 1
+		} else {
+			result.WriteByte(tmpl[i])
+			i++
+		}
+	}
+
+	return result.String()
 }
 
 func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table, query string, args ...any) {
