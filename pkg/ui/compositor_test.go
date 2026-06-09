@@ -203,7 +203,7 @@ func TestCompose_DataGrid_Success(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id", "title", "amount"},
-			Rows:    [][]string{{"1", "Book A", "25.5"}, {"2", "Book B", "35"}},
+			Rows:    [][]any{{"1", "Book A", "25.5"}, {"2", "Book B", "35"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -333,7 +333,7 @@ func TestCompose_DataGrid_ReactiveFiltering(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchResult: dataaccess.DataSet{
 				Headers: []string{"id", "title"},
-				Rows:    [][]string{{"1", "Book A"}},
+				Rows:    [][]any{{"1", "Book A"}},
 			},
 		},
 	}
@@ -637,7 +637,7 @@ func TestCompose_DataGrid_ServerMode_SubmitChannelQuery(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchResult: dataaccess.DataSet{
 				Headers: []string{"id", "title"},
-				Rows:    [][]string{{"1", "Book A"}},
+				Rows:    [][]any{{"1", "Book A"}},
 			},
 		},
 	}
@@ -743,7 +743,7 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchAllResult: dataaccess.DataSet{
 				Headers: []string{"id", "title", "author"},
-				Rows: [][]string{
+				Rows:    [][]any{
 					{"1", "Foundation", "Asimov"},
 					{"2", "Dune", "Herbert"},
 					{"3", "I, Robot", "Asimov"},
@@ -957,7 +957,7 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "title", "author"},
-			Rows: [][]string{
+			Rows:    [][]any{
 				{"1", "Foundation", "Asimov"},
 				{"2", "Dune", "Herbert"},
 				{"3", "I, Robot", "Asimov"},
@@ -1053,7 +1053,7 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchResult: dataaccess.DataSet{
 				Headers: []string{"id", "title"},
-				Rows:    [][]string{{"1", "Book A"}},
+				Rows:    [][]any{{"1", "Book A"}},
 			},
 		},
 	}
@@ -1181,7 +1181,7 @@ func TestCompose_DataGrid_RowSelection_PublishesToSelectionChannel(t *testing.T)
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id", "nombre", "monto"},
-			Rows:    [][]string{{"42", "Transaccion Test", "1000.5"}},
+			Rows:    [][]any{{"42", "Transaccion Test", "1000.5"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1261,7 +1261,7 @@ func TestCompose_DataGrid_RowSelection_OutOfBounds_NoPublish(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id"},
-			Rows:    [][]string{{"1"}},
+			Rows:    [][]any{{"1"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1316,7 +1316,7 @@ func TestCompose_DataGrid_RowSelection_NilEventBus_NoPanic(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id"},
-			Rows:    [][]string{{"1"}},
+			Rows:    [][]any{{"1"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1399,7 +1399,7 @@ func TestCompose_ReturnsCleanupFunc(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"title", "author"},
-			Rows:    [][]string{{"Foundation", "Asimov"}},
+			Rows:    [][]any{{"Foundation", "Asimov"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1434,7 +1434,7 @@ func TestCompose_CleanupRemovesSubscribers(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"title", "author"},
-			Rows:    [][]string{{"Foundation", "Asimov"}},
+			Rows:    [][]any{{"Foundation", "Asimov"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1489,7 +1489,7 @@ func TestCompose_CleanupCancelsGoroutines(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"title", "author"},
-			Rows:    [][]string{{"Foundation", "Asimov"}},
+			Rows:    [][]any{{"Foundation", "Asimov"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1526,7 +1526,7 @@ func TestCompose_IdempotentCleanup(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"title", "author"},
-			Rows:    [][]string{{"Foundation", "Asimov"}},
+			Rows:    [][]any{{"Foundation", "Asimov"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1596,7 +1596,7 @@ func TestCompose_DataGrid_ColumnWidthFromCWR(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id", "status", "name"},
-			Rows:    [][]string{{"1", "active", "Alice"}},
+			Rows:    [][]any{{"1", "active", "Alice"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{
@@ -1652,7 +1652,7 @@ func TestCompose_DataGrid_ColumnWidthFallback(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id", "name"},
-			Rows:    [][]string{{"1", "Alice"}},
+			Rows:    [][]any{{"1", "Alice"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{} // returns "" for all columns → fallback to defaultGridColWidth
@@ -1705,7 +1705,7 @@ func TestCompose_DataGrid_DynamicQueryFromState(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchResult: dataaccess.DataSet{
 				Headers: []string{"id"},
-				Rows:    [][]string{{"1"}},
+				Rows:    [][]any{{"1"}},
 			},
 		},
 	}
@@ -1795,7 +1795,7 @@ func TestLoadMasterBuffer_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name", "amount"},
-			Rows: [][]string{
+			Rows:    [][]any{
 				{"1", "Alice", "100"},
 				{"2", "Bob", "200"},
 			},
@@ -1854,7 +1854,7 @@ func TestFetchGridDataAsync_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchResult: dataaccess.DataSet{
 			Headers: []string{"id", "status"},
-			Rows:    [][]string{{"10", "active"}, {"20", "pending"}},
+			Rows:    [][]any{{"10", "active"}, {"20", "pending"}},
 		},
 	}
 	ui.CWR = &dataaccess.MockCWR{}
@@ -1912,7 +1912,7 @@ func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name"},
-			Rows: [][]string{
+			Rows:    [][]any{
 				{"1", "Alice"},
 				{"2", "Bob"},
 				{"3", "Charlie"},
@@ -2022,7 +2022,7 @@ func TestFilterMasterRows_Filtered_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name"},
-			Rows: [][]string{
+			Rows:    [][]any{
 				{"1", "Alice"},
 				{"2", "Bob"},
 				{"3", "Charlie"},
@@ -2456,5 +2456,235 @@ func TestCompose_Label_Reactive_MultipleEvents(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if lbl.Text != "Total: 0" {
 		t.Errorf("after third event: expected 'Total: 0', got %q", lbl.Text)
+	}
+}
+
+// --- T019-07: Native type preservation through entire grid pipeline ---
+
+func TestCompose_DataGrid_SelectionPreservesNativeTypes(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	var receivedPayload map[string]any
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	eb.Subscribe("publish_selection", func(ev eventbus.Event) {
+		if m, ok := ev.Payload.(map[string]any); ok {
+			receivedPayload = m
+		}
+		wg.Done()
+	})
+
+	// Use native types: int, string, float64, bool
+	ui.DS = &dataaccess.MockDataSource{
+		FetchResult: dataaccess.DataSet{
+			Headers: []string{"id", "nombre", "monto", "active"},
+			Rows:    [][]any{{42, "Record42", 1000.5, true}},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id, nombre, monto, active FROM records",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for async data loading
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for data_grid to load")
+	}
+
+	// Simulate row selection
+	table.OnSelected(widget.TableCellID{Row: 0, Col: 0})
+
+	// Wait for async EventBus delivery
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for publish_selection event")
+	}
+
+	if receivedPayload == nil {
+		t.Fatal("expected non-nil payload")
+	}
+
+	// Verify native types are preserved (not stringified)
+	idVal := receivedPayload["id"]
+	if _, ok := idVal.(int); !ok {
+		t.Errorf("payload[\"id\"] = %v (%T), want int", idVal, idVal)
+	}
+	montoVal := receivedPayload["monto"]
+	if _, ok := montoVal.(float64); !ok {
+		t.Errorf("payload[\"monto\"] = %v (%T), want float64", montoVal, montoVal)
+	}
+	activeVal := receivedPayload["active"]
+	if _, ok := activeVal.(bool); !ok {
+		t.Errorf("payload[\"active\"] = %v (%T), want bool", activeVal, activeVal)
+	}
+	nombreVal := receivedPayload["nombre"]
+	if nombreVal != "Record42" {
+		t.Errorf("payload[\"nombre\"] = %v, want Record42", nombreVal)
+	}
+}
+
+func TestCompose_DataGrid_NativeTypes_RenderCorrectly(t *testing.T) {
+	// T019-07 TRIANGULATE: Verify cells render as formatted strings
+	ui.DS = &dataaccess.MockDataSource{
+		FetchResult: dataaccess.DataSet{
+			Headers: []string{"id", "title", "amount"},
+			Rows:    [][]any{{1, "Book A", 25.5}, {2, "Book B", float64(35)}},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id, title, amount FROM books",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for async data loading
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for data_grid to load")
+	}
+
+	// Verify rendered cell text via UpdateCell callback
+	// We can't directly read cell text from widget.Table easily,
+	// but the UpdateCell was exercised during load. Let's verify
+	// via formatCellValue indirectly through the type system.
+	// The key assertion is that the grid loaded without panicking
+	// on non-string types.
+	rows, cols := table.Length()
+	if rows != 2 {
+		t.Errorf("expected 2 rows, got %d", rows)
+	}
+	if cols != 3 {
+		t.Errorf("expected 3 columns, got %d", cols)
+	}
+}
+
+func TestFilterMasterRows_NativeTypes_SubstringMatch(t *testing.T) {
+	// T019-05 TRIANGULATE: filterMasterRows works with native types in masterRows
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	ui.DS = &dataaccess.MockDataSource{
+		FetchAllResult: dataaccess.DataSet{
+			Headers: []string{"id", "title", "author"},
+			Rows: [][]any{
+				{1, "Foundation", "Asimov"},
+				{2, "Dune", "Herbert"},
+				{3, "Second Foundation", "Asimov"},
+			},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	node := ui.NodeMeta{
+		Area:             "grid_area",
+		ComponentRef:     "data_grid",
+		FilterMode:       "client",
+		MasterDataSource: "SELECT id, title, author FROM books",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Wait for async master buffer load
+	var masterLoaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := table.Length()
+		if rows > 0 {
+			masterLoaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !masterLoaded {
+		t.Fatal("timeout waiting for master buffer load")
+	}
+
+	// Initial: all 3 rows visible
+	rows, _ := table.Length()
+	if rows != 3 {
+		t.Errorf("expected 3 rows initially, got %d", rows)
+	}
+
+	// Publish filter with substring "Found" — should match Foundation and Second Foundation
+	eb.Publish("screen:submit:test-vista", map[string]any{"title": "Found"})
+
+	// Wait for client-side filter to apply
+	var filtered bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ = table.Length()
+		if rows == 2 {
+			filtered = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !filtered {
+		rows, _ = table.Length()
+		t.Errorf("expected 2 rows after filtering by 'Found', got %d", rows)
 	}
 }

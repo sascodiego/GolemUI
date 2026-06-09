@@ -34,9 +34,9 @@ type dataGridModel struct {
 	mu            sync.RWMutex
 	headers       []string
 	columns       []string
-	rows          [][]string
+	rows          [][]any
 	masterHeaders []string
-	masterRows    [][]string
+	masterRows    [][]any
 	filterKeys    []string
 	cancel        context.CancelFunc
 	unsubscribe   func()
@@ -223,7 +223,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 				}
 				row := model.rows[id.Row]
 				if id.Col < len(row) {
-					label.SetText(row[id.Col])
+					label.SetText(formatCellValue(row[id.Col]))
 				} else {
 					label.SetText("")
 				}
@@ -438,7 +438,7 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 		return
 	}
 
-	var filtered [][]string
+	var filtered [][]any
 	for _, row := range model.masterRows {
 		match := true
 		for key, val := range snap {
@@ -451,7 +451,7 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 				match = false
 				break
 			}
-			cellVal := row[col]
+			cellVal := formatCellValue(row[col])
 			searchStr := fmt.Sprintf("%v", val)
 			if searchStr == "" {
 				continue // empty filter matches all
@@ -473,6 +473,17 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	fyne.Do(func() {
 		table.Refresh()
 	})
+}
+
+// formatCellValue converts a native any cell value to string for display.
+// Mirrors dataaccess.FormatValue behavior but lives in ui to avoid import cycles.
+// pgtype.Numeric values should already be unwrapped by unwrapNumeric at the
+// fetch boundary, so only plain Go types (int64, float64, bool, string, nil) are expected.
+func formatCellValue(val any) string {
+	if val == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", val)
 }
 
 // containsIgnoreCase checks if substr is contained in s, case-insensitive.

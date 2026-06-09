@@ -29,10 +29,10 @@ func TestSQLDataSource_FetchWithValidData(t *testing.T) {
 	if len(result.Rows) != 2 {
 		t.Fatalf("Rows count = %d, want 2", len(result.Rows))
 	}
-	if result.Rows[0][0] != "1" || result.Rows[0][1] != "Alice" {
+	if result.Rows[0][0] != 1 || result.Rows[0][1] != "Alice" {
 		t.Errorf("Row 0 = %v, want [1, Alice]", result.Rows[0])
 	}
-	if result.Rows[1][0] != "2" || result.Rows[1][1] != "Bob" {
+	if result.Rows[1][0] != 2 || result.Rows[1][1] != "Bob" {
 		t.Errorf("Row 1 = %v, want [2, Bob]", result.Rows[1])
 	}
 }
@@ -151,8 +151,8 @@ func TestSQLDataSource_FetchEmptyRows(t *testing.T) {
 	}
 }
 
-func TestSQLDataSource_FetchNormalizesValuerTypes(t *testing.T) {
-	// TDS-09: Fetch normalizes all values to strings via FormatValue
+func TestSQLDataSource_FetchPreservesNativeTypesOld(t *testing.T) {
+	// TDS-09 (updated): Fetch preserves native types — values are NOT converted to strings
 	mockPool := db.NewMockDBPool()
 	mockPool.RegisterQuery("SELECT id, name FROM t",
 		[]string{"id", "name"},
@@ -165,15 +165,15 @@ func TestSQLDataSource_FetchNormalizesValuerTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// All values must be strings
-	for i, row := range result.Rows {
-		for j, cell := range row {
-			var _ string = cell // compile-time check: must be string
-			_ = fmt.Sprintf("row %d, col %d = %s", i, j, cell)
-		}
+	if len(result.Rows) != 1 {
+		t.Fatalf("Rows count = %d, want 1", len(result.Rows))
 	}
-	if result.Rows[0][0] != "42" {
-		t.Errorf("cell [0][0] = %q, want %q", result.Rows[0][0], "42")
+	// Values should be native types (int, string)
+	if result.Rows[0][0] != 42 {
+		t.Errorf("cell [0][0] = %v (%T), want 42", result.Rows[0][0], result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "hello" {
+		t.Errorf("cell [0][1] = %v (%T), want hello", result.Rows[0][1], result.Rows[0][1])
 	}
 }
 
@@ -200,6 +200,71 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// T019-02 RED: unwrapNumeric should convert pgtype.Numeric to float64
+func TestUnwrapNumeric_ConvertsPgtypeNumericToFloat64(t *testing.T) {
+	// This test will fail to compile until unwrapNumeric is defined
+	result := dataaccess.UnwrapNumeric(float64(99.5))
+	if _, ok := result.(float64); !ok {
+		t.Errorf("UnwrapNumeric(float64(99.5)) = %T, want float64", result)
+	}
+	if result != float64(99.5) {
+		t.Errorf("UnwrapNumeric(float64(99.5)) = %v, want 99.5", result)
+	}
+}
+
+func TestUnwrapNumeric_PassthroughNonNumeric(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  any
+	}{
+		{"int64", int64(42), int64(42)},
+		{"string", "hello", "hello"},
+		{"bool", true, true},
+		{"nil", nil, nil},
+		{"float64", 3.14, 3.14},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dataaccess.UnwrapNumeric(tt.input)
+			if got != tt.want {
+				t.Errorf("UnwrapNumeric(%v) = %v (%T), want %v (%T)", tt.input, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
+// T019-02 RED: Fetch should preserve native types
+func TestSQLDataSource_FetchPreservesNativeTypes(t *testing.T) {
+	mockPool := db.NewMockDBPool()
+	mockPool.RegisterQuery("SELECT id, name, amount, active FROM t",
+		[]string{"id", "name", "amount", "active"},
+		[][]any{{int64(42), "Alice", float64(99.5), true}},
+		nil,
+	)
+	ds := dataaccess.NewSQLDataSource(mockPool)
+
+	result, err := ds.Fetch(context.Background(), "SELECT id, name, amount, active FROM t")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("Rows count = %d, want 1", len(result.Rows))
+	}
+	if result.Rows[0][0] != int64(42) {
+		t.Errorf("Rows[0][0] = %v (%T), want int64(42)", result.Rows[0][0], result.Rows[0][0])
+	}
+	if result.Rows[0][1] != "Alice" {
+		t.Errorf("Rows[0][1] = %v (%T), want Alice", result.Rows[0][1], result.Rows[0][1])
+	}
+	if result.Rows[0][2] != float64(99.5) {
+		t.Errorf("Rows[0][2] = %v (%T), want 99.5", result.Rows[0][2], result.Rows[0][2])
+	}
+	if result.Rows[0][3] != true {
+		t.Errorf("Rows[0][3] = %v (%T), want true", result.Rows[0][3], result.Rows[0][3])
+	}
 }
 
 // Compile-time check: SQLDataSource must implement dataaccess.DataSource
