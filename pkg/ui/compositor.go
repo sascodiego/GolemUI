@@ -1,3 +1,12 @@
+// Package ui implements the GolemUI rendering engine.
+//
+// Thread-safety contract for EventBus subscribers:
+// Any LocalEventBus.Subscribe handler that mutates a Fyne widget (e.g. table.Refresh,
+// label.SetText, button.Enable) must wrap the mutation in fyne.Do(func() { ... }).
+// The EventBus dispatches each handler in a fresh goroutine (go h(event)).
+// Fyne requires widget mutations on the UI thread. fyne.Do bridges the two.
+// This applies to all current and future subscriber handlers, including the data_grid
+// reactive filtering and upcoming reactive label (017) and button state (018) bindings.
 package ui
 
 import (
@@ -23,7 +32,6 @@ const defaultGridColWidth float32 = 150
 
 type dataGridModel struct {
 	mu            sync.RWMutex
-	refreshMu     sync.Mutex // serializes all table.Refresh() calls to prevent concurrent widget mutations
 	headers       []string
 	columns       []string
 	rows          [][]string
@@ -365,13 +373,13 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 		model.rows = ds.Rows
 		model.mu.Unlock()
 
-		model.refreshMu.Lock()
-		for i, h := range ds.Headers {
-			w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.MasterDataSource)
-			table.SetColumnWidth(i, w)
-		}
-		table.Refresh()
-		model.refreshMu.Unlock()
+		fyne.Do(func() {
+			for i, h := range ds.Headers {
+				w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.MasterDataSource)
+				table.SetColumnWidth(i, w)
+			}
+			table.Refresh()
+		})
 	}()
 }
 
@@ -395,9 +403,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	if len(snap) == 0 {
 		model.rows = model.masterRows
 		model.mu.Unlock()
-		model.refreshMu.Lock()
-		table.Refresh()
-		model.refreshMu.Unlock()
+		fyne.Do(func() {
+			table.Refresh()
+		})
 		return
 	}
 
@@ -433,9 +441,9 @@ func filterMasterRows(model *dataGridModel, table *widget.Table, snap map[string
 	model.rows = filtered
 	model.mu.Unlock()
 
-	model.refreshMu.Lock()
-	table.Refresh()
-	model.refreshMu.Unlock()
+	fyne.Do(func() {
+		table.Refresh()
+	})
 }
 
 // containsIgnoreCase checks if substr is contained in s, case-insensitive.
@@ -513,13 +521,13 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 		model.rows = ds.Rows
 		model.mu.Unlock()
 
-		model.refreshMu.Lock()
-		for i, h := range ds.Headers {
-			w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.DataSource)
-			table.SetColumnWidth(i, w)
-		}
-		table.Refresh()
-		model.refreshMu.Unlock()
+		fyne.Do(func() {
+			for i, h := range ds.Headers {
+				w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.DataSource)
+				table.SetColumnWidth(i, w)
+			}
+			table.Refresh()
+		})
 	}()
 }
 
