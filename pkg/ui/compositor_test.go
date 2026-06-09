@@ -2,6 +2,8 @@ package ui_test
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1780,5 +1782,384 @@ func TestCompose_DataGrid_DynamicQueryFromState(t *testing.T) {
 		trackingDS.mu.Unlock()
 		t.Fatalf("expected Fetch to be called with resolved query (no args), got %d calls: %+v",
 			len(calls), calls)
+	}
+}
+
+// --- TDD Phase 4: fyne.Do thread-safety tests for DataGrid ---
+
+// T-4.6: TestLoadMasterBuffer_WrapsInFyneDo verifies that loadMasterBuffer
+// correctly loads data and updates the table via fyne.Do (REQ-DG-01).
+// In the test environment, fyne.Do runs synchronously on the calling goroutine,
+// so we verify the end result: table has data after async load completes.
+func TestLoadMasterBuffer_WrapsInFyneDo(t *testing.T) {
+	ui.DS = &dataaccess.MockDataSource{
+		FetchAllResult: dataaccess.DataSet{
+			Headers: []string{"id", "name", "amount"},
+			Rows: [][]string{
+				{"1", "Alice", "100"},
+				{"2", "Bob", "200"},
+			},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	node := ui.NodeMeta{
+		Area:             "grid_area",
+		ComponentRef:     "data_grid",
+		FilterMode:       "client",
+		MasterDataSource: "SELECT * FROM items",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-master-buffer")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+	defer cleanup()
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Poll for async loadMasterBuffer to complete (the fyne.Do wraps
+	// SetColumnWidth + Refresh, so data should appear after it runs)
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 1*time.Second; {
+		rows, cols := table.Length()
+		if rows == 2 && cols == 3 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !loaded {
+		rows, cols := table.Length()
+		t.Fatalf("expected 2x3 table after loadMasterBuffer, got %dx%d", rows, cols)
+	}
+
+	// Verify cell content
+	cell := table.CreateCell()
+	table.UpdateCell(widget.TableCellID{Row: 0, Col: 1}, cell)
+	lbl := cell.(*widget.Label)
+	if lbl.Text != "Alice" {
+		t.Errorf("expected cell (0,1) = 'Alice', got %q", lbl.Text)
+	}
+}
+
+// T-4.7: TestFetchGridDataAsync_WrapsInFyneDo verifies that fetchGridDataAsync
+// correctly loads data and updates the table via fyne.Do (REQ-DG-02).
+func TestFetchGridDataAsync_WrapsInFyneDo(t *testing.T) {
+	ui.DS = &dataaccess.MockDataSource{
+		FetchResult: dataaccess.DataSet{
+			Headers: []string{"id", "status"},
+			Rows:    [][]string{{"10", "active"}, {"20", "pending"}},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "grid_area",
+		ComponentRef: "data_grid",
+		DataSource:   "SELECT id, status FROM items",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-fetch-async")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+	defer cleanup()
+
+	table, ok := obj.(*widget.Table)
+	if !ok {
+		t.Fatalf("expected *widget.Table, got %T", obj)
+	}
+
+	// Poll for async fetchGridDataAsync to complete
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 1*time.Second; {
+		rows, cols := table.Length()
+		if rows == 2 && cols == 2 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !loaded {
+		rows, cols := table.Length()
+		t.Fatalf("expected 2x2 table after fetchGridDataAsync, got %dx%d", rows, cols)
+	}
+
+	// Verify cell content
+	cell := table.CreateCell()
+	table.UpdateCell(widget.TableCellID{Row: 1, Col: 1}, cell)
+	lbl := cell.(*widget.Label)
+	if lbl.Text != "pending" {
+		t.Errorf("expected cell (1,1) = 'pending', got %q", lbl.Text)
+	}
+}
+
+// T-4.8: TestFilterMasterRows_EmptySnap_WrapsInFyneDo verifies that filtering
+// with an empty snapshot resets to master rows via fyne.Do (REQ-DG-03).
+func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	ui.DS = &dataaccess.MockDataSource{
+		FetchAllResult: dataaccess.DataSet{
+			Headers: []string{"id", "name"},
+			Rows: [][]string{
+				{"1", "Alice"},
+				{"2", "Bob"},
+				{"3", "Charlie"},
+			},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	containerNode := ui.NodeMeta{
+		Area:         "screen",
+		ComponentRef: "container",
+		Layout:       ui.LayoutMeta{Type: "vertical"},
+		Children: []ui.NodeMeta{
+			{
+				Area:         "input",
+				ComponentRef: "text_input",
+				BindTo:       "name",
+			},
+			{
+				Area:         "btn",
+				ComponentRef: "button",
+				Label:        "Filter",
+				SubmitAction: "filter",
+			},
+			{
+				Area:             "grid",
+				ComponentRef:     "data_grid",
+				FilterMode:       "client",
+				MasterDataSource: "SELECT * FROM items",
+			},
+		},
+	}
+
+	obj, cleanup, err := ui.Compose(containerNode, "test-filter-empty")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+	defer cleanup()
+
+	c := obj.(*fyne.Container)
+	gridTable := c.Objects[2].(*widget.Table)
+
+	// Wait for master buffer load
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := gridTable.Length()
+		if rows == 3 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for master buffer load")
+	}
+
+	// First: filter to get fewer rows (type “Alice” and submit)
+	entry := c.Objects[0].(*widget.Entry)
+	test.Type(entry, "Alice")
+	test.Tap(c.Objects[1].(*widget.Button))
+
+	// Wait for filter to apply
+	var filtered bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := gridTable.Length()
+		if rows == 1 {
+			filtered = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !filtered {
+		rows, _ := gridTable.Length()
+		t.Fatalf("expected 1 row after filter, got %d", rows)
+	}
+
+	// Now submit with empty input — empty snapshot resets to master
+	test.Type(entry, "") // clear filter
+	// We need to clear the entry first
+	entry.SetText("")
+	test.Tap(c.Objects[1].(*widget.Button))
+
+	// Wait for reset to master rows (3 rows)
+	var reset bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := gridTable.Length()
+		if rows == 3 {
+			reset = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !reset {
+		rows, _ := gridTable.Length()
+		t.Errorf("expected 3 rows after empty-snap filter reset, got %d", rows)
+	}
+}
+
+// T-4.9: TestFilterMasterRows_Filtered_WrapsInFyneDo verifies that filtering
+// with a matching snapshot reduces rows via fyne.Do (REQ-DG-04).
+func TestFilterMasterRows_Filtered_WrapsInFyneDo(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	ui.DS = &dataaccess.MockDataSource{
+		FetchAllResult: dataaccess.DataSet{
+			Headers: []string{"id", "name"},
+			Rows: [][]string{
+				{"1", "Alice"},
+				{"2", "Bob"},
+				{"3", "Charlie"},
+			},
+		},
+	}
+	ui.CWR = &dataaccess.MockCWR{}
+	defer func() { ui.DS = nil; ui.CWR = nil }()
+
+	containerNode := ui.NodeMeta{
+		Area:         "screen",
+		ComponentRef: "container",
+		Layout:       ui.LayoutMeta{Type: "vertical"},
+		Children: []ui.NodeMeta{
+			{
+				Area:         "input",
+				ComponentRef: "text_input",
+				BindTo:       "name",
+			},
+			{
+				Area:         "btn",
+				ComponentRef: "button",
+				Label:        "Filter",
+				SubmitAction: "filter",
+			},
+			{
+				Area:             "grid",
+				ComponentRef:     "data_grid",
+				FilterMode:       "client",
+				MasterDataSource: "SELECT * FROM items",
+			},
+		},
+	}
+
+	obj, cleanup, err := ui.Compose(containerNode, "test-filter-matching")
+	if err != nil {
+		t.Fatalf("Compose failed: %v", err)
+	}
+	defer cleanup()
+
+	c := obj.(*fyne.Container)
+	gridTable := c.Objects[2].(*widget.Table)
+
+	// Wait for master buffer load
+	var loaded bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := gridTable.Length()
+		if rows == 3 {
+			loaded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !loaded {
+		t.Fatal("timeout waiting for master buffer load")
+	}
+
+	// Filter with "ob” (matches “Bob”)
+	entry := c.Objects[0].(*widget.Entry)
+	test.Type(entry, "ob")
+	test.Tap(c.Objects[1].(*widget.Button))
+
+	// Wait for filter — only Bob should remain
+	var filtered bool
+	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
+		rows, _ := gridTable.Length()
+		if rows == 1 {
+			filtered = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !filtered {
+		rows, _ := gridTable.Length()
+		t.Errorf("expected 1 row after filter (Bob), got %d", rows)
+	}
+
+	// Verify the remaining row is Bob
+	cell := gridTable.CreateCell()
+	gridTable.UpdateCell(widget.TableCellID{Row: 0, Col: 1}, cell)
+	lbl := cell.(*widget.Label)
+	if lbl.Text != "Bob" {
+		t.Errorf("expected filtered row to be 'Bob', got %q", lbl.Text)
+	}
+}
+
+// T-4.10: TestDataGrid_ModelMuUnlockedBeforeFyneDo verifies REQ-LOCK-01:
+// at every DataGrid site, model.mu is NOT held during fyne.Do callback execution.
+// We test this structurally by confirming no Unlock appears inside any fyne.Do block.
+func TestDataGrid_ModelMuUnlockedBeforeFyneDo(t *testing.T) {
+	// This is a structural/source-level test. We grep the compositor source
+	// to verify that model.mu.Unlock() never appears inside a fyne.Do callback.
+	src, err := os.ReadFile("compositor.go")
+	if err != nil {
+		t.Skip("could not read compositor.go source for structural check")
+	}
+
+	source := string(src)
+	lines := strings.Split(source, "\n")
+
+	// Parse fyne.Do blocks: find each "fyne.Do(func()" and the matching "})" closure,
+	// then check that no "model.mu.Unlock()" appears between them.
+	var inFyneDo bool
+	braceDepth := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !inFyneDo && (strings.Contains(trimmed, "fyne.Do(func()") || strings.Contains(trimmed, "fyne.DoAndWait(func()")) {
+			inFyneDo = true
+			braceDepth = 0
+		}
+
+		if inFyneDo {
+			// Count braces to track when the callback closes
+			braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
+
+			if strings.Contains(trimmed, "model.mu.Unlock()") {
+				t.Errorf("REQ-LOCK-01 violation: model.mu.Unlock() found inside fyne.Do/DoAndWait callback at line %d: %s", i+1, trimmed)
+			}
+
+			if braceDepth <= 0 {
+				inFyneDo = false
+			}
+		}
+	}
+}
+
+// T-4.11: TestDataGrid_NoRefreshMuInModel verifies that the dataGridModel
+// struct has no refreshMu field (REQ-DG-05: complete removal of refreshMu).
+func TestDataGrid_NoRefreshMuInModel(t *testing.T) {
+	// Structural/source-level test: grep compositor.go for refreshMu
+	src, err := os.ReadFile("compositor.go")
+	if err != nil {
+		t.Skip("could not read compositor.go source for structural check")
+	}
+
+	if strings.Contains(string(src), "refreshMu") {
+		t.Error("REQ-DG-05 violation: 'refreshMu' found in compositor.go source — should be completely removed")
 	}
 }

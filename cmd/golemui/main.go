@@ -132,9 +132,11 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 			prevCleanup = cleanup
 			cleanupMu.Unlock()
 
-			mainContainer.Objects = []fyne.CanvasObject{newUI}
-			mainContainer.Refresh()
-			navTree.SelectByVistaID(vID)
+			fyne.Do(func() {
+				mainContainer.Objects = []fyne.CanvasObject{newUI}
+				mainContainer.Refresh()
+				navTree.SelectByVistaID(vID)
+			})
 		}()
 	}
 

@@ -48,13 +48,20 @@ func (nt *NavTree) SelectByVistaID(vistaID string) {
 		}
 		cur = pid
 	}
-	for i := len(ancestors) - 1; i >= 0; i-- {
-		nt.tree.OpenBranch(widget.TreeNodeID(ancestors[i]))
-	}
 
 	nt.navigating.Store(true)
 	defer func() { nt.navigating.Store(false) }()
-	nt.tree.Select(widget.TreeNodeID(nodeID))
+
+	// fyne.DoAndWait blocks until the callback completes on the UI thread.
+	// This preserves the re-entrancy guard: navigating is true for the
+	// entire duration of the tree mutation, so OnSelected cannot re-enter
+	// Navigate during programmatic selection.
+	fyne.DoAndWait(func() {
+		for i := len(ancestors) - 1; i >= 0; i-- {
+			nt.tree.OpenBranch(widget.TreeNodeID(ancestors[i]))
+		}
+		nt.tree.Select(widget.TreeNodeID(nodeID))
+	})
 }
 
 // BuildNavTree transforms a flat []MenuItem slice into a NavTree containing an

@@ -1,7 +1,9 @@
 package ui_test
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2/widget"
@@ -362,5 +364,122 @@ func TestReentrancyGuardPreventsLoop(t *testing.T) {
 	// Navigate should have been called exactly once (not infinitely)
 	if navigateCount != 1 {
 		t.Errorf("expected Navigate to be called exactly 1 time, got %d", navigateCount)
+	}
+}
+
+// --- TDD Phase 4: fyne.DoAndWait thread-safety tests ---
+
+// T-4.3: TestSelectByVistaID_DispatchesViaFyneDoAndWait verifies that calling
+// SelectByVistaID from a background goroutine dispatches tree mutations via
+// fyne.DoAndWait and the navigating guard is cleared after return (REQ-SB-01, REQ-SB-02).
+func TestSelectByVistaID_DispatchesViaFyneDoAndWait(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "nav_principal", PadreID: "", Titulo: "Menú Principal", VistaID: "", Orden: 0},
+		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
+	}
+
+	navTree := ui.BuildNavTree(items)
+
+	// Call SelectByVistaID from a background goroutine to verify it works
+	// correctly when not on the UI thread (which is the production path from
+	// Navigate's goroutine).
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("panic in SelectByVistaID: %v", r)
+			} else {
+				done <- nil
+			}
+		}()
+		navTree.SelectByVistaID("home")
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SelectByVistaID from goroutine failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SelectByVistaID timed out — possible deadlock in fyne.DoAndWait")
+	}
+
+	// After return, navigating guard must be false
+	// (the defer resetting it runs after fyne.DoAndWait returns)
+	// We can't directly access navigating, but we can verify the guard is
+	// cleared by calling OnSelected and confirming Navigate fires.
+	var navigated string
+	ui.Navigate = func(vistaID string) { navigated = vistaID }
+	defer func() { ui.Navigate = nil }()
+
+	tree := navTree.Widget()
+	tree.OnSelected("nav_home")
+
+	if navigated != "home" {
+		t.Errorf("expected Navigate to be called with 'home' after guard cleared, got %q", navigated)
+	}
+}
+
+// T-4.4: TestSelectByVistaID_ReentrancyGuardHoldsAcrossDoAndWait verifies that
+// the navigating re-entrancy guard is true during the fyne.DoAndWait callback
+// execution, preventing OnSelected from re-entering Navigate (REQ-SB-02).
+func TestSelectByVistaID_ReentrancyGuardHoldsAcrossDoAndWait(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "nav_principal", PadreID: "", Titulo: "Menú Principal", VistaID: "", Orden: 0},
+		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
+	}
+
+	// Track if Navigate was called during programmatic selection
+	var navigateDuringSelect bool
+	ui.Navigate = func(vistaID string) {
+		navigateDuringSelect = true
+	}
+	defer func() { ui.Navigate = nil }()
+
+	navTree := ui.BuildNavTree(items)
+
+	// SelectByVistaID triggers tree.Select inside fyne.DoAndWait.
+	// The tree's OnSelected callback fires during the select. If the guard
+	// is working, Navigate is suppressed.
+	navTree.SelectByVistaID("home")
+
+	if navigateDuringSelect {
+		t.Error("expected Navigate NOT to be called during programmatic selection — re-entrancy guard failed")
+	}
+}
+
+// T-4.5: TestSelectByVistaID_EmptyAndUnknown_NoFyneDo verifies that calling
+// SelectByVistaID with empty or unknown vistaID does not dispatch any tree
+// mutations (REQ-SB-03). These are early-return no-ops.
+func TestSelectByVistaID_EmptyAndUnknown_NoFyneDo(t *testing.T) {
+	items := []ui.MenuItem{
+		{ID: "nav_principal", PadreID: "", Titulo: "Menú Principal", VistaID: "", Orden: 0},
+		{ID: "nav_home", PadreID: "nav_principal", Titulo: "Inicio", VistaID: "home", Orden: 1},
+	}
+
+	navTree := ui.BuildNavTree(items)
+	tree := navTree.Widget()
+
+	// Track if any selection actually occurred
+	var selectedNode string
+	origOnSelected := tree.OnSelected
+	tree.OnSelected = func(uid widget.TreeNodeID) {
+		selectedNode = string(uid)
+		if origOnSelected != nil {
+			origOnSelected(uid)
+		}
+	}
+
+	// Empty vistaID — should be a complete no-op
+	navTree.SelectByVistaID("")
+	if selectedNode != "" {
+		t.Errorf("expected no tree selection for empty vistaID, got %q", selectedNode)
+	}
+
+	// Unknown vistaID — also a no-op
+	selectedNode = ""
+	navTree.SelectByVistaID("nonexistent")
+	if selectedNode != "" {
+		t.Errorf("expected no tree selection for unknown vistaID, got %q", selectedNode)
 	}
 }
