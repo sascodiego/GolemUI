@@ -7,6 +7,40 @@ context: |
   Testing: go test, fyne/test, golangci-lint, gofmt, go vet.
   Style: Conventional commits, production-first, ephemeral DB.
 
+settings:
+  mode: hybrid
+  execution_mode: interactive
+  delivery_strategy: ask-on-risk
+  strict_tdd: true
+
+testing:
+  test_runner:
+    command: "go test ./..."
+    framework: "go test / testing"
+  test_layers:
+    unit:
+      available: true
+      tool: "testing"
+    integration:
+      available: true
+      tool: "fyne/test, pgx"
+    e2e:
+      available: false
+      tool: "—"
+  coverage:
+    available: true
+    command: "go test -coverprofile=coverage.out ./..."
+  quality_tools:
+    linter:
+      available: true
+      command: "golangci-lint run"
+    type_checker:
+      available: true
+      command: "go build / go vet"
+    formatter:
+      available: true
+      command: "gofmt -w ."
+
 rules:
   proposal:
     - Include rollback plan for database schema changes or plugin migrations.

@@ -3,8 +3,8 @@ package ui_test
 import (
 	"testing"
 
-	"fyne.io/fyne/v2"
 	"GolemUI/pkg/ui"
+	"fyne.io/fyne/v2"
 )
 
 type mockCanvasObject struct {
@@ -112,12 +112,12 @@ func TestFractionalLayout_Triangulate(t *testing.T) {
 	layout.Layout(objects, containerSize)
 
 	expectedPositions := []fyne.Position{
-		fyne.NewPos(0, 0),     // 00
-		fyne.NewPos(125, 0),   // 10
-		fyne.NewPos(210, 0),   // 20
-		fyne.NewPos(0, 55),    // 01
-		fyne.NewPos(125, 55),  // 11
-		fyne.NewPos(210, 55),  // 21
+		fyne.NewPos(0, 0),    // 00
+		fyne.NewPos(125, 0),  // 10
+		fyne.NewPos(210, 0),  // 20
+		fyne.NewPos(0, 55),   // 01
+		fyne.NewPos(125, 55), // 11
+		fyne.NewPos(210, 55), // 21
 	}
 
 	expectedSizes := []fyne.Size{

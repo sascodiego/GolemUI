@@ -191,7 +191,6 @@ func (m *MockRows) FieldDescriptions() []pgconn.FieldDescription {
 	return res
 }
 
-
 func (m *MockRows) Next() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -1,11 +1,11 @@
 package db_test
 
 import (
+	"GolemUI/pkg/db"
 	"context"
 	"fmt"
 	"sync"
 	"testing"
-	"GolemUI/pkg/db"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -228,6 +228,3 @@ func TestMockRowsFieldDescriptions(t *testing.T) {
 		}
 	})
 }
-
-
-
