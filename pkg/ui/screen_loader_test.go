@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/ui"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestDefaultLayoutQuery(t *testing.T) {
@@ -140,11 +140,11 @@ func TestLoadScreen(t *testing.T) {
 			},
 		},
 		{
-			name:     "nil pool: returns error without DB call",
-			pool:     nil,
-			vistaID:  "home",
+			name:      "nil pool: returns error without DB call",
+			pool:      nil,
+			vistaID:   "home",
 			setupMock: func(m *db.MockDBPool) {},
-			wantErr:  true,
+			wantErr:   true,
 			validate: func(t *testing.T, node ui.NodeMeta) {
 				t.Helper()
 			},
@@ -290,4 +290,3 @@ func TestNodeMeta_MasterDataSource_DefaultEmpty(t *testing.T) {
 		t.Errorf("expected MasterDataSource to default to empty string, got %q", node.MasterDataSource)
 	}
 }
-

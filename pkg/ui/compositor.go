@@ -2,24 +2,24 @@ package ui
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"sync"
 
-	"GolemUI/pkg/db"
 	"GolemUI/pkg/eventbus"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
 
-var BusinessPool db.DatabasePool
-var CorePool db.DatabasePool
+var DS DataSource
+var CWR ColumnWidthResolver
 var LocalEventBus eventbus.EventBus
 var Navigate func(vistaID string)
+
+const defaultGridColWidth float32 = 150
 
 type dataGridModel struct {
 	mu            sync.RWMutex
@@ -32,6 +32,7 @@ type dataGridModel struct {
 	filterKeys    []string
 	cancel        context.CancelFunc
 	unsubscribe   func()
+	wg            sync.WaitGroup
 }
 
 type LayoutMeta struct {
@@ -315,6 +316,7 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 				if unsubFn != nil {
 					unsubFn()
 				}
+				model.wg.Wait()
 			})
 		}
 
@@ -327,69 +329,26 @@ func composeWithState(node NodeMeta, state *ScreenState) (fyne.CanvasObject, fun
 	}
 }
 
-// extractOrderedArgs maps snapshot keys to positional args ($1, $2, ...) in FilterKeys order.
-// Missing keys default to empty string (so LIKE ” matches everything instead of NULL = false).
-// Returns empty slice when filterKeys is empty — no alphabetical fallback.
-func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
-	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs called with filterKeys: %+v (len: %d)", filterKeys, len(filterKeys))
-	if len(filterKeys) == 0 {
-		return []any{}
-	}
-	args := make([]any, 0, len(filterKeys))
-	for _, key := range filterKeys {
-		val, exists := snap[key]
-		if !exists {
-			args = append(args, "")
-		} else {
-			args = append(args, val)
-		}
-	}
-	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs returning args: %+v (len: %d)", args, len(args))
-	return args
-}
-
 // loadMasterBuffer eagerly loads all data from MasterDataSource into the model's masterRows.
 func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, table *widget.Table) {
-	pool := BusinessPool
-	if pool == nil {
-		log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot load master buffer for data_grid at area %q", node.Area)
+	dsource := DS
+	if dsource == nil {
+		log.Printf("[UI/DataGrid] Warning: DataSource is nil; cannot load master buffer for data_grid at area %q", node.Area)
 		return
 	}
-	log.Printf("[UI/DataGrid] Requesting master buffer eagerly for area %q. SQL: %q", node.Area, node.MasterDataSource)
+	cwr := CWR
+	log.Printf("[UI/DataGrid] Requesting master buffer eagerly for area %q. Source: %q", node.Area, node.MasterDataSource)
+	model.wg.Add(1)
 	go func() {
+		defer model.wg.Done()
 		if err := ctx.Err(); err != nil {
 			log.Printf("[UI/DataGrid] Master buffer load cancelled before start for area %q", node.Area)
 			return
 		}
-		rows, err := pool.Query(ctx, node.MasterDataSource)
+		ds, err := dsource.FetchAll(ctx, node.MasterDataSource)
 		if err != nil {
 			log.Printf("[UI/DataGrid] Error loading master buffer %q: %v", node.MasterDataSource, err)
 			return
-		}
-		defer rows.Close()
-
-		fds := rows.FieldDescriptions()
-		var headers []string
-		for _, fd := range fds {
-			headers = append(headers, fd.Name)
-		}
-
-		var dataRows [][]string
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				log.Printf("[UI/DataGrid] Master buffer load cancelled during row scan for area %q", node.Area)
-				return
-			}
-			vals, err := rows.Values()
-			if err != nil {
-				log.Printf("[UI/DataGrid] Error scanning master row values: %v", err)
-				break
-			}
-			var stringRow []string
-			for _, val := range vals {
-				stringRow = append(stringRow, formatValue(val))
-			}
-			dataRows = append(dataRows, stringRow)
 		}
 
 		if err := ctx.Err(); err != nil {
@@ -397,18 +356,19 @@ func loadMasterBuffer(ctx context.Context, node NodeMeta, model *dataGridModel, 
 			return
 		}
 
-		log.Printf("[UI/DataGrid] Master buffer execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(headers), len(dataRows))
+		log.Printf("[UI/DataGrid] Master buffer execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(ds.Headers), len(ds.Rows))
 
 		model.mu.Lock()
-		model.masterHeaders = headers
-		model.masterRows = dataRows
-		model.headers = headers
-		model.rows = dataRows
+		model.masterHeaders = ds.Headers
+		model.masterRows = ds.Rows
+		model.headers = ds.Headers
+		model.rows = ds.Rows
 		model.mu.Unlock()
 
 		model.refreshMu.Lock()
-		for i := 0; i < len(headers); i++ {
-			table.SetColumnWidth(i, 150)
+		for i, h := range ds.Headers {
+			w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.MasterDataSource)
+			table.SetColumnWidth(i, w)
 		}
 		table.Refresh()
 		model.refreshMu.Unlock()
@@ -520,46 +480,24 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 	if query == "" {
 		return
 	}
-	pool := BusinessPool
-	log.Printf("[UI/DataGrid] Requesting data async for area %q. SQL: %q, Args: %+v", node.Area, query, args)
+	dsource := DS
+	if dsource == nil {
+		log.Printf("[UI/DataGrid] Warning: DataSource is nil; cannot execute query for data_grid at area %q", node.Area)
+		return
+	}
+	cwr := CWR
+	log.Printf("[UI/DataGrid] Requesting data async for area %q. Source: %q, Args: %+v", node.Area, query, args)
+	model.wg.Add(1)
 	go func() {
-		if pool == nil {
-			log.Printf("[UI/DataGrid] Warning: BusinessPool is nil; cannot execute query for data_grid at area %q", node.Area)
-			return
-		}
+		defer model.wg.Done()
 		if err := ctx.Err(); err != nil {
 			log.Printf("[UI/DataGrid] Query cancelled before start for area %q", node.Area)
 			return
 		}
-		rows, err := pool.Query(ctx, query, args...)
+		ds, err := dsource.Fetch(ctx, query, args...)
 		if err != nil {
 			log.Printf("[UI/DataGrid] Error running query %q: %v", query, err)
 			return
-		}
-		defer rows.Close()
-
-		fds := rows.FieldDescriptions()
-		var headers []string
-		for _, fd := range fds {
-			headers = append(headers, fd.Name)
-		}
-
-		var dataRows [][]string
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				log.Printf("[UI/DataGrid] Query cancelled during row scan for area %q", node.Area)
-				return
-			}
-			vals, err := rows.Values()
-			if err != nil {
-				log.Printf("[UI/DataGrid] Error scanning row values: %v", err)
-				break
-			}
-			var stringRow []string
-			for _, val := range vals {
-				stringRow = append(stringRow, formatValue(val))
-			}
-			dataRows = append(dataRows, stringRow)
 		}
 
 		if err := ctx.Err(); err != nil {
@@ -567,37 +505,68 @@ func fetchGridDataAsync(ctx context.Context, node NodeMeta, model *dataGridModel
 			return
 		}
 
-		log.Printf("[UI/DataGrid] Query execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(headers), len(dataRows))
+		log.Printf("[UI/DataGrid] Query execution successful for area %q. Loaded %d columns, %d rows.", node.Area, len(ds.Headers), len(ds.Rows))
 
 		model.mu.Lock()
-		model.headers = headers
-		model.columns = headers
-		model.rows = dataRows
+		model.headers = ds.Headers
+		model.columns = ds.Headers
+		model.rows = ds.Rows
 		model.mu.Unlock()
 
 		model.refreshMu.Lock()
-		for i := 0; i < len(headers); i++ {
-			table.SetColumnWidth(i, 150)
+		for i, h := range ds.Headers {
+			w := resolveWidth(cwr, ds.ColumnWidths, i, h, node.DataSource)
+			table.SetColumnWidth(i, w)
 		}
 		table.Refresh()
 		model.refreshMu.Unlock()
 	}()
 }
 
-func formatValue(val any) string {
-	if val == nil {
-		return ""
+// resolveWidth determines the pixel width for a data grid column.
+// Resolution order:
+//  1. Inline hint from DataSet.ColumnWidths[colIndex]
+//  2. ColumnWidthResolver (Layer 3 → Layer 2) via the CWR global
+//  3. Fallback to defaultGridColWidth (150)
+func resolveWidth(cwr ColumnWidthResolver, columnWidths []string, colIndex int, header string, origen string) float32 {
+	// Step 1: inline hint from DataSet
+	if colIndex < len(columnWidths) && columnWidths[colIndex] != "" {
+		spec := parseMetric(columnWidths[colIndex])
+		if spec.mType == metricFixed {
+			return spec.value
+		}
 	}
-	if valuer, ok := val.(driver.Valuer); ok {
-		v, err := valuer.Value()
-		if err == nil && v != nil {
-			switch ts := v.(type) {
-			case []byte:
-				return string(ts)
-			default:
-				return fmt.Sprintf("%v", v)
+	// Step 2: metadata resolver (Layer 3 → Layer 2)
+	if cwr != nil {
+		resolved := cwr.Resolve(origen, header)
+		if resolved != "" {
+			spec := parseMetric(resolved)
+			if spec.mType == metricFixed {
+				return spec.value
 			}
 		}
 	}
-	return fmt.Sprintf("%v", val)
+	// Step 3: fallback constant
+	return defaultGridColWidth
+}
+
+// extractOrderedArgs maps snapshot keys to positional args ($1, $2, ...) in FilterKeys order.
+// Missing keys default to empty string (so LIKE ” matches everything instead of NULL = false).
+// Returns empty slice when filterKeys is empty — no alphabetical fallback.
+func extractOrderedArgs(snap map[string]any, filterKeys []string) []any {
+	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs called with filterKeys: %+v (len: %d)", filterKeys, len(filterKeys))
+	if len(filterKeys) == 0 {
+		return []any{}
+	}
+	args := make([]any, 0, len(filterKeys))
+	for _, key := range filterKeys {
+		val, exists := snap[key]
+		if !exists {
+			args = append(args, "")
+		} else {
+			args = append(args, val)
+		}
+	}
+	log.Printf("[UI/DataGrid] Debug: extractOrderedArgs returning args: %+v (len: %d)", args, len(args))
+	return args
 }

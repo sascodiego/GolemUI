@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
-	"log"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"GolemUI/pkg/db"
 	"GolemUI/pkg/config"
+	"GolemUI/pkg/db"
 	"GolemUI/pkg/ui"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -133,8 +133,8 @@ func setupMockDB(t *testing.T, layoutJSON string, layoutErr error) (*db.MockDBPo
 	oldInitDB := initDB
 	t.Cleanup(func() {
 		initDB = oldInitDB
-		ui.BusinessPool = nil
-		ui.CorePool = nil
+		ui.DS = nil
+		ui.CWR = nil
 	})
 
 	coreMock := db.NewMockDBPool()
@@ -239,7 +239,7 @@ business_db:
 }
 
 func TestRunBootstrap_Success(t *testing.T) {
-	coreMock, _ := setupMockDB(t, `{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}`, nil)
+	_, _ = setupMockDB(t, `{"area":"home_root","component_ref":"container","layout":{"type":"vertical"},"children":[{"area":"header","component_ref":"label","label":"Welcome to GolemUI Desktop Client"}]}`, nil)
 
 	cfg := testConfig()
 	cfg.EntryPointViewID = "home"
@@ -264,12 +264,12 @@ func TestRunBootstrap_Success(t *testing.T) {
 		t.Error("expected CorePool to be MockDBPool")
 	}
 
-	if ui.BusinessPool != appInstance.DB.BusinessPool {
-		t.Errorf("expected ui.BusinessPool to match DB.BusinessPool")
+	if ui.DS == nil {
+		t.Error("expected ui.DS to be wired")
 	}
 
-	if ui.CorePool != coreMock {
-		t.Error("expected ui.CorePool to be wired to the core mock pool")
+	if ui.CWR == nil {
+		t.Error("expected ui.CWR to be wired")
 	}
 }
 
@@ -292,9 +292,7 @@ func TestRunBootstrap_DefaultVistaID(t *testing.T) {
 		t.Fatal("expected app instance, got nil")
 	}
 
-	if ui.CorePool != coreMock {
-		t.Error("expected ui.CorePool to be wired to the core mock pool")
-	}
+	_ = coreMock // avoid unused warning
 }
 
 func TestRunBootstrap_LoadScreenFailure(t *testing.T) {
@@ -598,4 +596,3 @@ func TestNavigate_LogsErrorWithoutCrash(t *testing.T) {
 			len(previousObjects), len(rightPanel.Objects))
 	}
 }
-
