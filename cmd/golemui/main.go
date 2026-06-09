@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/viper"
 
 	"GolemUI/pkg/config"
+	"GolemUI/pkg/dataaccess"
 	"GolemUI/pkg/db"
 	"GolemUI/pkg/eventbus"
 	"GolemUI/pkg/ui"
@@ -70,8 +72,11 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
-	ui.BusinessPool = dbPool.BusinessPool
-	ui.CorePool = dbPool.CorePool
+	// Wire DataSource for business data queries (Layer 1 boundary)
+	ui.DS = dataaccess.NewSQLDataSource(dbPool.BusinessPool)
+
+	// Wire ColumnWidthResolver for Layer 2/3 metadata
+	ui.CWR = dataaccess.NewColumnWidthResolver(dbPool.CorePool)
 
 	// 3. Event bus setup (pkg/eventbus)
 	eb := eventbus.NewEventBus()
@@ -84,7 +89,7 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	win := fyneApp.NewWindow("GolemUI Client")
 
 	// Setup navigation menu and split layout
-	menuItems, err := ui.LoadNavigationMenu(ctx, ui.CorePool)
+	menuItems, err := ui.LoadNavigationMenu(ctx, dbPool.CorePool)
 	if err != nil {
 		dbPool.Close()
 		return nil, fmt.Errorf("failed to load navigation menu: %w", err)
@@ -98,18 +103,21 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	split.SetOffset(0.2)
 
 	// Setup navigation callback — updates only the right panel
+	var cleanupMu sync.Mutex
 	var prevCleanup func()
 
 	ui.Navigate = func(vID string) {
 		log.Printf("[UI/Navigation] Navigating to screen %q", vID)
 		go func() {
 			// Tear down previous screen before loading the new one
+			cleanupMu.Lock()
 			if prevCleanup != nil {
 				prevCleanup()
 				prevCleanup = nil
 			}
+			cleanupMu.Unlock()
 
-			node, err := ui.LoadScreen(ctx, ui.CorePool, vID, cfg.LayoutQuery)
+			node, err := ui.LoadScreen(ctx, dbPool.CorePool, vID, cfg.LayoutQuery)
 			if err != nil {
 				log.Printf("[UI/Navigation] Error loading screen %q: %v", vID, err)
 				return
@@ -119,7 +127,11 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 				log.Printf("[UI/Navigation] Error composing screen %q: %v", vID, err)
 				return
 			}
+
+			cleanupMu.Lock()
 			prevCleanup = cleanup
+			cleanupMu.Unlock()
+
 			mainContainer.Objects = []fyne.CanvasObject{newUI}
 			mainContainer.Refresh()
 			navTree.SelectByVistaID(vID)
@@ -132,7 +144,7 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 		vistaID = "home"
 	}
 
-	homeNode, err := ui.LoadScreen(ctx, ui.CorePool, vistaID, cfg.LayoutQuery)
+	homeNode, err := ui.LoadScreen(ctx, dbPool.CorePool, vistaID, cfg.LayoutQuery)
 	if err != nil {
 		dbPool.Close()
 		return nil, fmt.Errorf("failed to load screen %q: %w", vistaID, err)
@@ -158,6 +170,15 @@ func RunBootstrap(ctx context.Context, cfg *config.BootstrapConfig, runWindow bo
 	}
 
 	if runWindow {
+		win.SetOnClosed(func() {
+			cleanupMu.Lock()
+			if prevCleanup != nil {
+				prevCleanup()
+				prevCleanup = nil
+			}
+			cleanupMu.Unlock()
+			dbPool.Close()
+		})
 		win.ShowAndRun()
 	}
 
