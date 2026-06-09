@@ -2163,3 +2163,298 @@ func TestDataGrid_NoRefreshMuInModel(t *testing.T) {
 		t.Error("REQ-DG-05 violation: 'refreshMu' found in compositor.go source — should be completely removed")
 	}
 }
+
+// --- Reactive label integration tests ---
+
+func TestCompose_Label_Static_NoDataSource(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "static_label",
+		ComponentRef: "label",
+		Label:        "Username:",
+		DataSource:   "",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	lbl, ok := obj.(*widget.Label)
+	if !ok {
+		t.Fatalf("expected *widget.Label, got %T", obj)
+	}
+	if lbl.Text != "Username:" {
+		t.Errorf("expected label text 'Username:', got %q", lbl.Text)
+	}
+
+	// Publish to a channel — label should not change
+	eb.Publish("publish_selection", map[string]any{"x": "value"})
+	time.Sleep(100 * time.Millisecond)
+
+	if lbl.Text != "Username:" {
+		t.Errorf("static label should not change after event, got %q", lbl.Text)
+	}
+}
+
+func TestCompose_Label_Static_NilBus(t *testing.T) {
+	ui.LocalEventBus = nil
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Value: {x}",
+		DataSource:   "publish_selection",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	lbl, ok := obj.(*widget.Label)
+	if !ok {
+		t.Fatalf("expected *widget.Label, got %T", obj)
+	}
+	if lbl.Text != "Value: {x}" {
+		t.Errorf("expected raw template text when bus is nil, got %q", lbl.Text)
+	}
+}
+
+func TestCompose_Label_Reactive_UpdatesOnEvent(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Monto: {transaccion.detalles.valor} {transaccion.detalles.moneda}",
+		DataSource:   "publish_selection",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	lbl, ok := obj.(*widget.Label)
+	if !ok {
+		t.Fatalf("expected *widget.Label, got %T", obj)
+	}
+
+	// Initial text should be the raw template
+	if lbl.Text != "Monto: {transaccion.detalles.valor} {transaccion.detalles.moneda}" {
+		t.Errorf("expected initial template text, got %q", lbl.Text)
+	}
+
+	// Publish the nested payload
+	eb.Publish("publish_selection", map[string]any{
+		"transaccion": map[string]any{
+			"id": 101,
+			"detalles": map[string]any{
+				"moneda": "USD",
+				"valor":  500.0,
+			},
+		},
+	})
+
+	// Wait for goroutine delivery + fyne.Do processing
+	time.Sleep(200 * time.Millisecond)
+
+	if lbl.Text != "Monto: 500 USD" {
+		t.Errorf("expected resolved text 'Monto: 500 USD', got %q", lbl.Text)
+	}
+}
+
+func TestCompose_Label_Reactive_CleanupUnsubscribes(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Amount: {amount}",
+		DataSource:   "publish_selection",
+	}
+
+	_, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	// Verify subscription exists
+	count := eb.(*eventbus.InMemEventBus).SubscriberCount("publish_selection")
+	if count < 1 {
+		t.Fatalf("expected at least 1 subscriber, got %d", count)
+	}
+
+	// Call cleanup
+	cleanup()
+
+	// Verify subscription removed
+	count = eb.(*eventbus.InMemEventBus).SubscriberCount("publish_selection")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers after cleanup, got %d", count)
+	}
+}
+
+func TestCompose_Label_Reactive_IdempotentCleanup(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Amount: {amount}",
+		DataSource:   "publish_selection",
+	}
+
+	_, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+
+	count := eb.(*eventbus.InMemEventBus).SubscriberCount("publish_selection")
+	if count < 1 {
+		t.Fatalf("expected at least 1 subscriber, got %d", count)
+	}
+
+	// Call cleanup twice
+	cleanup()
+	cleanup() // should be no-op
+
+	count = eb.(*eventbus.InMemEventBus).SubscriberCount("publish_selection")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers after double cleanup, got %d", count)
+	}
+}
+
+func TestCompose_Label_Reactive_EventPrefix(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Status: {status}",
+		DataSource:   "event:custom_channel",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	// Should subscribe to "custom_channel" (prefix stripped)
+	count := eb.(*eventbus.InMemEventBus).SubscriberCount("custom_channel")
+	if count < 1 {
+		t.Fatalf("expected at least 1 subscriber on 'custom_channel', got %d", count)
+	}
+
+	// Should NOT subscribe to the full "event:custom_channel" string
+	count = eb.(*eventbus.InMemEventBus).SubscriberCount("event:custom_channel")
+	if count != 0 {
+		t.Fatalf("expected 0 subscribers on 'event:custom_channel', got %d", count)
+	}
+
+	lbl := obj.(*widget.Label)
+
+	// Publish to the stripped channel
+	eb.Publish("custom_channel", map[string]any{"status": "active"})
+	time.Sleep(200 * time.Millisecond)
+
+	if lbl.Text != "Status: active" {
+		t.Errorf("expected 'Status: active', got %q", lbl.Text)
+	}
+}
+
+func TestCompose_Label_Reactive_BadPayloadSkips(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Amount: {amount}",
+		DataSource:   "publish_selection",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	lbl := obj.(*widget.Label)
+
+	// First: publish a valid payload
+	eb.Publish("publish_selection", map[string]any{"amount": 100.0})
+	time.Sleep(200 * time.Millisecond)
+	if lbl.Text != "Amount: 100" {
+		t.Fatalf("after valid payload: expected 'Amount: 100', got %q", lbl.Text)
+	}
+
+	// Now publish bad payloads — label should retain previous text
+	badPayloads := []any{"string payload", 42, nil, []string{"a", "b"}}
+	for _, bad := range badPayloads {
+		eb.Publish("publish_selection", bad)
+		time.Sleep(100 * time.Millisecond)
+		if lbl.Text != "Amount: 100" {
+			t.Errorf("after bad payload (%v): expected 'Amount: 100', got %q", bad, lbl.Text)
+		}
+	}
+}
+
+func TestCompose_Label_Reactive_MultipleEvents(t *testing.T) {
+	eb := eventbus.NewEventBus()
+	ui.LocalEventBus = eb
+	defer func() { ui.LocalEventBus = nil }()
+
+	node := ui.NodeMeta{
+		Area:         "detail",
+		ComponentRef: "label",
+		Label:        "Total: {amount}",
+		DataSource:   "publish_selection",
+	}
+
+	obj, cleanup, err := ui.Compose(node, "test-vista")
+	if err != nil {
+		t.Fatalf("Compose returned error: %v", err)
+	}
+	defer cleanup()
+
+	lbl := obj.(*widget.Label)
+
+	// Event 1: amount = 100.0
+	eb.Publish("publish_selection", map[string]any{"amount": 100.0})
+	time.Sleep(200 * time.Millisecond)
+	if lbl.Text != "Total: 100" {
+		t.Errorf("after first event: expected 'Total: 100', got %q", lbl.Text)
+	}
+
+	// Event 2: amount = 200.0
+	eb.Publish("publish_selection", map[string]any{"amount": 200.0})
+	time.Sleep(200 * time.Millisecond)
+	if lbl.Text != "Total: 200" {
+		t.Errorf("after second event: expected 'Total: 200', got %q", lbl.Text)
+	}
+
+	// Event 3: amount = 0
+	eb.Publish("publish_selection", map[string]any{"amount": 0})
+	time.Sleep(200 * time.Millisecond)
+	if lbl.Text != "Total: 0" {
+		t.Errorf("after third event: expected 'Total: 0', got %q", lbl.Text)
+	}
+}
