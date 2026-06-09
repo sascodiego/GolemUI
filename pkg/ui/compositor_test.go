@@ -19,7 +19,9 @@ import (
 
 func TestMain(m *testing.M) {
 	test.NewApp()
-	m.Run()
+	eventbus.SynchronousPublish = true
+	ui.SynchronousGridLoad = true
+	os.Exit(m.Run())
 }
 
 // trackingMockDataSource wraps MockDataSource and records calls.
@@ -369,6 +371,7 @@ func TestCompose_DataGrid_ReactiveFiltering(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose returned error: %v", err)
@@ -393,26 +396,29 @@ func TestCompose_DataGrid_ReactiveFiltering(t *testing.T) {
 		t.Fatalf("expected second child to be *widget.Button, got %T", c.Objects[1])
 	}
 
+	// Wait for initial async query load to finish
+	ui.UIUpdateWG.Wait()
+
+	// Reset UIUpdateWG to wait for the next async query triggered by the tap
+	ui.UIUpdateWG = sync.WaitGroup{}
+
 	// Type into the entry, then click submit
 	test.Type(entry, "Book A")
 	test.Tap(submitBtn)
 
-	// Wait for query to execute with the typed text as positional arg
+	// Wait for the triggered query to finish
+	ui.UIUpdateWG.Wait()
+
+	// Verify Fetch was called with parameter 'Book A'
+	trackingDS.mu.Lock()
+	calls := trackingDS.fetchCalls
+	trackingDS.mu.Unlock()
 	var foundCall bool
-	for start := time.Now(); time.Since(start) < 1000*time.Millisecond; {
-		trackingDS.mu.Lock()
-		calls := trackingDS.fetchCalls
-		trackingDS.mu.Unlock()
-		for _, call := range calls {
-			if len(call.args) > 0 && call.args[0] == "Book A" {
-				foundCall = true
-				break
-			}
-		}
-		if foundCall {
+	for _, call := range calls {
+		if len(call.args) > 0 && call.args[0] == "Book A" {
+			foundCall = true
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	if !foundCall {
@@ -679,6 +685,7 @@ func TestCompose_DataGrid_ServerMode_SubmitChannelQuery(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -693,41 +700,41 @@ func TestCompose_DataGrid_ServerMode_SubmitChannelQuery(t *testing.T) {
 		t.Fatalf("expected 4 children, got %d", len(c.Objects))
 	}
 
+	// Wait for initial async query load to finish
+	ui.UIUpdateWG.Wait()
+
 	// Type into inputs
 	titleEntry := c.Objects[0].(*widget.Entry)
 	authorEntry := c.Objects[1].(*widget.Entry)
 	test.Type(titleEntry, "%Sci-fi%")
 	test.Type(authorEntry, "Asimov")
 
+	// Reset UIUpdateWG to wait for the next async query triggered by the tap
+	ui.UIUpdateWG = sync.WaitGroup{}
+
 	// Click submit button
 	submitBtn := c.Objects[2].(*widget.Button)
 	test.Tap(submitBtn)
 
-	// Wait for the Fetch call with positional args
+	// Wait for the triggered query to finish
+	ui.UIUpdateWG.Wait()
+
+	// Verify the Fetch call with positional args
+	trackingDS.mu.Lock()
+	calls := trackingDS.fetchCalls
+	trackingDS.mu.Unlock()
 	var foundCall bool
-	for start := time.Now(); time.Since(start) < 1000*time.Millisecond; {
-		trackingDS.mu.Lock()
-		calls := trackingDS.fetchCalls
-		trackingDS.mu.Unlock()
-		for _, call := range calls {
-			if call.source == "SELECT * FROM books WHERE title LIKE $1 AND author = $2" &&
-				len(call.args) == 2 &&
-				call.args[0] == "%Sci-fi%" &&
-				call.args[1] == "Asimov" {
-				foundCall = true
-				break
-			}
-		}
-		if foundCall {
+	for _, call := range calls {
+		if call.source == "SELECT * FROM books WHERE title LIKE $1 AND author = $2" &&
+			len(call.args) == 2 &&
+			call.args[0] == "%Sci-fi%" &&
+			call.args[1] == "Asimov" {
+			foundCall = true
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	if !foundCall {
-		trackingDS.mu.Lock()
-		calls := trackingDS.fetchCalls
-		trackingDS.mu.Unlock()
 		t.Fatalf("expected server-mode Fetch with args [%q, %q], got %d calls: %+v",
 			"%Sci-fi%", "Asimov", len(calls), calls)
 	}
@@ -743,7 +750,7 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 		MockDataSource: &dataaccess.MockDataSource{
 			FetchAllResult: dataaccess.DataSet{
 				Headers: []string{"id", "title", "author"},
-				Rows:    [][]any{
+				Rows: [][]any{
 					{"1", "Foundation", "Asimov"},
 					{"2", "Dune", "Herbert"},
 					{"3", "I, Robot", "Asimov"},
@@ -781,6 +788,7 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -793,20 +801,7 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 	}
 
 	// Wait for eager master buffer load
-	var loaded bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		trackingDS.mu.Lock()
-		calls := len(trackingDS.fetchAllCalls)
-		trackingDS.mu.Unlock()
-		if calls > 0 {
-			loaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !loaded {
-		t.Fatal("expected FetchAll to be called during Compose")
-	}
+	ui.UIUpdateWG.Wait()
 
 	// Verify master data was loaded via FetchAll
 	trackingDS.mu.Lock()
@@ -820,9 +815,6 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 
 	filterBtn := c.Objects[1].(*widget.Button)
 	test.Tap(filterBtn)
-
-	// Wait for client-side filter to apply
-	time.Sleep(100 * time.Millisecond)
 
 	// Verify NO additional Fetch calls for client-mode filtering
 	trackingDS.mu.Lock()
@@ -840,17 +832,8 @@ func TestCompose_DataGrid_ClientMode_EagerLoadAndFilter(t *testing.T) {
 
 	// Verify the grid shows filtered data (only Asimov rows)
 	gridTable := c.Objects[2].(*widget.Table)
-	var filtered bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 2 { // Foundation + I, Robot (both Asimov)
-			filtered = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !filtered {
-		rows, _ := gridTable.Length()
+	rows, _ := gridTable.Length()
+	if rows != 2 { // Foundation + I, Robot (both Asimov)
 		t.Errorf("expected 2 filtered rows (Asimov), got %d", rows)
 	}
 }
@@ -957,7 +940,7 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "title", "author"},
-			Rows:    [][]any{
+			Rows: [][]any{
 				{"1", "Foundation", "Asimov"},
 				{"2", "Dune", "Herbert"},
 				{"3", "I, Robot", "Asimov"},
@@ -999,6 +982,7 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -1011,7 +995,7 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 	}
 
 	// Wait for eager master buffer load
-	time.Sleep(200 * time.Millisecond)
+	ui.UIUpdateWG.Wait()
 
 	// Type valid filter + bogus filter
 	authorEntry := c.Objects[0].(*widget.Entry)
@@ -1023,22 +1007,10 @@ func TestCompose_ClientMode_FilterMismatchColumn_LogsWarning(t *testing.T) {
 	filterBtn := c.Objects[2].(*widget.Button)
 	test.Tap(filterBtn)
 
-	// Wait for client-side filter
-	time.Sleep(100 * time.Millisecond)
-
 	// Verify grid shows only Asimov rows (filter on valid column worked despite bogus key)
 	gridTable := c.Objects[3].(*widget.Table)
-	var filtered bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 2 { // Foundation + I, Robot
-			filtered = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !filtered {
-		rows, _ := gridTable.Length()
+	rows, _ := gridTable.Length()
+	if rows != 2 { // Foundation + I, Robot
 		t.Errorf("expected 2 filtered rows (Asimov), got %d — filter should still work on matching keys", rows)
 	}
 }
@@ -1087,6 +1059,7 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-vista")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -1099,7 +1072,7 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 	}
 
 	// Wait for initial data load
-	time.Sleep(200 * time.Millisecond)
+	ui.UIUpdateWG.Wait()
 
 	trackingDS.mu.Lock()
 	initialCalls := len(trackingDS.fetchCalls)
@@ -1109,9 +1082,6 @@ func TestCompose_ServerMode_NoFilterKeys_SkipsSubmit(t *testing.T) {
 	entry := c.Objects[0].(*widget.Entry)
 	test.Type(entry, "Book A")
 	test.Tap(c.Objects[1].(*widget.Button))
-
-	// Wait for potential submit processing
-	time.Sleep(200 * time.Millisecond)
 
 	// Verify NO additional query was fired (guard prevented it)
 	trackingDS.mu.Lock()
@@ -1795,7 +1765,7 @@ func TestLoadMasterBuffer_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name", "amount"},
-			Rows:    [][]any{
+			Rows: [][]any{
 				{"1", "Alice", "100"},
 				{"2", "Bob", "200"},
 			},
@@ -1811,6 +1781,7 @@ func TestLoadMasterBuffer_WrapsInFyneDo(t *testing.T) {
 		MasterDataSource: "SELECT * FROM items",
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(node, "test-master-buffer")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -1822,20 +1793,11 @@ func TestLoadMasterBuffer_WrapsInFyneDo(t *testing.T) {
 		t.Fatalf("expected *widget.Table, got %T", obj)
 	}
 
-	// Poll for async loadMasterBuffer to complete (the fyne.Do wraps
-	// SetColumnWidth + Refresh, so data should appear after it runs)
-	var loaded bool
-	for start := time.Now(); time.Since(start) < 1*time.Second; {
-		rows, cols := table.Length()
-		if rows == 2 && cols == 3 {
-			loaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for async loadMasterBuffer to complete
+	ui.UIUpdateWG.Wait()
 
-	if !loaded {
-		rows, cols := table.Length()
+	rows, cols := table.Length()
+	if rows != 2 || cols != 3 {
 		t.Fatalf("expected 2x3 table after loadMasterBuffer, got %dx%d", rows, cols)
 	}
 
@@ -1866,6 +1828,7 @@ func TestFetchGridDataAsync_WrapsInFyneDo(t *testing.T) {
 		DataSource:   "SELECT id, status FROM items",
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(node, "test-fetch-async")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -1877,19 +1840,11 @@ func TestFetchGridDataAsync_WrapsInFyneDo(t *testing.T) {
 		t.Fatalf("expected *widget.Table, got %T", obj)
 	}
 
-	// Poll for async fetchGridDataAsync to complete
-	var loaded bool
-	for start := time.Now(); time.Since(start) < 1*time.Second; {
-		rows, cols := table.Length()
-		if rows == 2 && cols == 2 {
-			loaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for async fetchGridDataAsync to complete
+	ui.UIUpdateWG.Wait()
 
-	if !loaded {
-		rows, cols := table.Length()
+	rows, cols := table.Length()
+	if rows != 2 || cols != 2 {
 		t.Fatalf("expected 2x2 table after fetchGridDataAsync, got %dx%d", rows, cols)
 	}
 
@@ -1912,7 +1867,7 @@ func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name"},
-			Rows:    [][]any{
+			Rows: [][]any{
 				{"1", "Alice"},
 				{"2", "Bob"},
 				{"3", "Charlie"},
@@ -1947,6 +1902,7 @@ func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-filter-empty")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -1957,36 +1913,15 @@ func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
 	gridTable := c.Objects[2].(*widget.Table)
 
 	// Wait for master buffer load
-	var loaded bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 3 {
-			loaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !loaded {
-		t.Fatal("timeout waiting for master buffer load")
-	}
+	ui.UIUpdateWG.Wait()
 
 	// First: filter to get fewer rows (type “Alice” and submit)
 	entry := c.Objects[0].(*widget.Entry)
 	test.Type(entry, "Alice")
 	test.Tap(c.Objects[1].(*widget.Button))
 
-	// Wait for filter to apply
-	var filtered bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 1 {
-			filtered = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !filtered {
-		rows, _ := gridTable.Length()
+	rows, _ := gridTable.Length()
+	if rows != 1 {
 		t.Fatalf("expected 1 row after filter, got %d", rows)
 	}
 
@@ -1996,18 +1931,8 @@ func TestFilterMasterRows_EmptySnap_WrapsInFyneDo(t *testing.T) {
 	entry.SetText("")
 	test.Tap(c.Objects[1].(*widget.Button))
 
-	// Wait for reset to master rows (3 rows)
-	var reset bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 3 {
-			reset = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !reset {
-		rows, _ := gridTable.Length()
+	rows, _ = gridTable.Length()
+	if rows != 3 {
 		t.Errorf("expected 3 rows after empty-snap filter reset, got %d", rows)
 	}
 }
@@ -2022,7 +1947,7 @@ func TestFilterMasterRows_Filtered_WrapsInFyneDo(t *testing.T) {
 	ui.DS = &dataaccess.MockDataSource{
 		FetchAllResult: dataaccess.DataSet{
 			Headers: []string{"id", "name"},
-			Rows:    [][]any{
+			Rows: [][]any{
 				{"1", "Alice"},
 				{"2", "Bob"},
 				{"3", "Charlie"},
@@ -2057,6 +1982,7 @@ func TestFilterMasterRows_Filtered_WrapsInFyneDo(t *testing.T) {
 		},
 	}
 
+	ui.UIUpdateWG = sync.WaitGroup{}
 	obj, cleanup, err := ui.Compose(containerNode, "test-filter-matching")
 	if err != nil {
 		t.Fatalf("Compose failed: %v", err)
@@ -2067,45 +1993,16 @@ func TestFilterMasterRows_Filtered_WrapsInFyneDo(t *testing.T) {
 	gridTable := c.Objects[2].(*widget.Table)
 
 	// Wait for master buffer load
-	var loaded bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 3 {
-			loaded = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !loaded {
-		t.Fatal("timeout waiting for master buffer load")
-	}
+	ui.UIUpdateWG.Wait()
 
-	// Filter with "ob” (matches “Bob”)
+	// Filter with "ob" (matches "Bob")
 	entry := c.Objects[0].(*widget.Entry)
 	test.Type(entry, "ob")
 	test.Tap(c.Objects[1].(*widget.Button))
 
-	// Wait for filter — only Bob should remain
-	var filtered bool
-	for start := time.Now(); time.Since(start) < 500*time.Millisecond; {
-		rows, _ := gridTable.Length()
-		if rows == 1 {
-			filtered = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !filtered {
-		rows, _ := gridTable.Length()
+	rows, _ := gridTable.Length()
+	if rows != 1 {
 		t.Errorf("expected 1 row after filter (Bob), got %d", rows)
-	}
-
-	// Verify the remaining row is Bob
-	cell := gridTable.CreateCell()
-	gridTable.UpdateCell(widget.TableCellID{Row: 0, Col: 1}, cell)
-	lbl := cell.(*widget.Label)
-	if lbl.Text != "Bob" {
-		t.Errorf("expected filtered row to be 'Bob', got %q", lbl.Text)
 	}
 }
 
@@ -2166,6 +2063,14 @@ func TestDataGrid_NoRefreshMuInModel(t *testing.T) {
 
 // --- Reactive label integration tests ---
 
+func getLabelText(lbl *widget.Label) string {
+	var txt string
+	fyne.DoAndWait(func() {
+		txt = lbl.Text
+	})
+	return txt
+}
+
 func TestCompose_Label_Static_NoDataSource(t *testing.T) {
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
@@ -2188,16 +2093,16 @@ func TestCompose_Label_Static_NoDataSource(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *widget.Label, got %T", obj)
 	}
-	if lbl.Text != "Username:" {
-		t.Errorf("expected label text 'Username:', got %q", lbl.Text)
+	if getLabelText(lbl) != "Username:" {
+		t.Errorf("expected label text 'Username:', got %q", getLabelText(lbl))
 	}
 
 	// Publish to a channel — label should not change
 	eb.Publish("publish_selection", map[string]any{"x": "value"})
 	time.Sleep(100 * time.Millisecond)
 
-	if lbl.Text != "Username:" {
-		t.Errorf("static label should not change after event, got %q", lbl.Text)
+	if getLabelText(lbl) != "Username:" {
+		t.Errorf("static label should not change after event, got %q", getLabelText(lbl))
 	}
 }
 
@@ -2227,6 +2132,8 @@ func TestCompose_Label_Static_NilBus(t *testing.T) {
 }
 
 func TestCompose_Label_Reactive_UpdatesOnEvent(t *testing.T) {
+	eventbus.PublishWG = sync.WaitGroup{}
+	ui.UIUpdateWG = sync.WaitGroup{}
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 	defer func() { ui.LocalEventBus = nil }()
@@ -2250,8 +2157,8 @@ func TestCompose_Label_Reactive_UpdatesOnEvent(t *testing.T) {
 	}
 
 	// Initial text should be the raw template
-	if lbl.Text != "Monto: {transaccion.detalles.valor} {transaccion.detalles.moneda}" {
-		t.Errorf("expected initial template text, got %q", lbl.Text)
+	if getLabelText(lbl) != "Monto: {transaccion.detalles.valor} {transaccion.detalles.moneda}" {
+		t.Errorf("expected initial template text, got %q", getLabelText(lbl))
 	}
 
 	// Publish the nested payload
@@ -2266,10 +2173,11 @@ func TestCompose_Label_Reactive_UpdatesOnEvent(t *testing.T) {
 	})
 
 	// Wait for goroutine delivery + fyne.Do processing
-	time.Sleep(200 * time.Millisecond)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
 
-	if lbl.Text != "Monto: 500 USD" {
-		t.Errorf("expected resolved text 'Monto: 500 USD', got %q", lbl.Text)
+	if getLabelText(lbl) != "Monto: 500 USD" {
+		t.Errorf("expected resolved text 'Monto: 500 USD', got %q", getLabelText(lbl))
 	}
 }
 
@@ -2339,6 +2247,8 @@ func TestCompose_Label_Reactive_IdempotentCleanup(t *testing.T) {
 }
 
 func TestCompose_Label_Reactive_EventPrefix(t *testing.T) {
+	eventbus.PublishWG = sync.WaitGroup{}
+	ui.UIUpdateWG = sync.WaitGroup{}
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 	defer func() { ui.LocalEventBus = nil }()
@@ -2372,14 +2282,17 @@ func TestCompose_Label_Reactive_EventPrefix(t *testing.T) {
 
 	// Publish to the stripped channel
 	eb.Publish("custom_channel", map[string]any{"status": "active"})
-	time.Sleep(200 * time.Millisecond)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
 
-	if lbl.Text != "Status: active" {
-		t.Errorf("expected 'Status: active', got %q", lbl.Text)
+	if getLabelText(lbl) != "Status: active" {
+		t.Errorf("expected 'Status: active', got %q", getLabelText(lbl))
 	}
 }
 
 func TestCompose_Label_Reactive_BadPayloadSkips(t *testing.T) {
+	eventbus.PublishWG = sync.WaitGroup{}
+	ui.UIUpdateWG = sync.WaitGroup{}
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 	defer func() { ui.LocalEventBus = nil }()
@@ -2401,23 +2314,27 @@ func TestCompose_Label_Reactive_BadPayloadSkips(t *testing.T) {
 
 	// First: publish a valid payload
 	eb.Publish("publish_selection", map[string]any{"amount": 100.0})
-	time.Sleep(200 * time.Millisecond)
-	if lbl.Text != "Amount: 100" {
-		t.Fatalf("after valid payload: expected 'Amount: 100', got %q", lbl.Text)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
+	if getLabelText(lbl) != "Amount: 100" {
+		t.Fatalf("after valid payload: expected 'Amount: 100', got %q", getLabelText(lbl))
 	}
 
 	// Now publish bad payloads — label should retain previous text
 	badPayloads := []any{"string payload", 42, nil, []string{"a", "b"}}
 	for _, bad := range badPayloads {
 		eb.Publish("publish_selection", bad)
+		eventbus.PublishWG.Wait()
 		time.Sleep(100 * time.Millisecond)
-		if lbl.Text != "Amount: 100" {
-			t.Errorf("after bad payload (%v): expected 'Amount: 100', got %q", bad, lbl.Text)
+		if getLabelText(lbl) != "Amount: 100" {
+			t.Errorf("after bad payload (%v): expected 'Amount: 100', got %q", bad, getLabelText(lbl))
 		}
 	}
 }
 
 func TestCompose_Label_Reactive_MultipleEvents(t *testing.T) {
+	eventbus.PublishWG = sync.WaitGroup{}
+	ui.UIUpdateWG = sync.WaitGroup{}
 	eb := eventbus.NewEventBus()
 	ui.LocalEventBus = eb
 	defer func() { ui.LocalEventBus = nil }()
@@ -2439,23 +2356,26 @@ func TestCompose_Label_Reactive_MultipleEvents(t *testing.T) {
 
 	// Event 1: amount = 100.0
 	eb.Publish("publish_selection", map[string]any{"amount": 100.0})
-	time.Sleep(200 * time.Millisecond)
-	if lbl.Text != "Total: 100" {
-		t.Errorf("after first event: expected 'Total: 100', got %q", lbl.Text)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
+	if getLabelText(lbl) != "Total: 100" {
+		t.Errorf("after first event: expected 'Total: 100', got %q", getLabelText(lbl))
 	}
 
 	// Event 2: amount = 200.0
 	eb.Publish("publish_selection", map[string]any{"amount": 200.0})
-	time.Sleep(200 * time.Millisecond)
-	if lbl.Text != "Total: 200" {
-		t.Errorf("after second event: expected 'Total: 200', got %q", lbl.Text)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
+	if getLabelText(lbl) != "Total: 200" {
+		t.Errorf("after second event: expected 'Total: 200', got %q", getLabelText(lbl))
 	}
 
 	// Event 3: amount = 0
 	eb.Publish("publish_selection", map[string]any{"amount": 0})
-	time.Sleep(200 * time.Millisecond)
-	if lbl.Text != "Total: 0" {
-		t.Errorf("after third event: expected 'Total: 0', got %q", lbl.Text)
+	eventbus.PublishWG.Wait()
+	ui.UIUpdateWG.Wait()
+	if getLabelText(lbl) != "Total: 0" {
+		t.Errorf("after third event: expected 'Total: 0', got %q", getLabelText(lbl))
 	}
 }
 

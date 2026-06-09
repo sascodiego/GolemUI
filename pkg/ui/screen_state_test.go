@@ -174,3 +174,70 @@ func TestScreenState_ConcurrentSetAndSnapshot(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// --- Preload tests (Spec 018) ---
+
+func TestScreenState_Preload_InjectsNewKeys(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Preload(map[string]any{"id": "99", "type": "debit"})
+
+	if v := s.Get("id"); v != "99" {
+		t.Errorf("expected Get('id') = '99', got %v", v)
+	}
+	if v := s.Get("type"); v != "debit" {
+		t.Errorf("expected Get('type') = 'debit', got %v", v)
+	}
+}
+
+func TestScreenState_Preload_NoOverwrite(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Set("id", "original")
+	s.Preload(map[string]any{"id": "from_preload"})
+
+	if v := s.Get("id"); v != "original" {
+		t.Errorf("expected original value preserved, got %v", v)
+	}
+}
+
+func TestScreenState_Preload_MergesWithExisting(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Set("existing", "value")
+	s.Preload(map[string]any{"new": "param", "existing": "ignored"})
+
+	if v := s.Get("existing"); v != "value" {
+		t.Errorf("expected existing value preserved, got %v", v)
+	}
+	if v := s.Get("new"); v != "param" {
+		t.Errorf("expected new key injected, got %v", v)
+	}
+}
+
+func TestScreenState_Preload_NilMap_NoPanic(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Preload(nil) // must not panic
+
+	if s.Get("anything") != nil {
+		t.Error("expected nil for unset key")
+	}
+}
+
+func TestScreenState_Preload_EmptyMap_NoPanic(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Preload(map[string]any{}) // must not panic
+}
+
+func TestScreenState_Preload_AvailableInSnapshot(t *testing.T) {
+	s := ui.NewScreenState("test-screen")
+
+	s.Preload(map[string]any{"id": "99"})
+
+	snap := s.Snapshot()
+	if v, ok := snap["id"]; !ok || v != "99" {
+		t.Errorf("expected snapshot to contain preloaded key, got %v", v)
+	}
+}

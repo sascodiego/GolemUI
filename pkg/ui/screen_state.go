@@ -40,6 +40,22 @@ func (s *ScreenState) Get(key string) any {
 	return s.data[key]
 }
 
+// Preload injects key-value pairs into the state before widget composition.
+// Values are only set if the key does not already exist (no-overwrite semantics).
+// This is used to pass query-string parameters from Navigate to child widgets.
+func (s *ScreenState) Preload(params map[string]any) {
+	if len(params) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range params {
+		if _, exists := s.data[k]; !exists {
+			s.data[k] = v
+		}
+	}
+}
+
 // Snapshot returns a shallow copy of the current state map.
 // Mutations to the returned map do not affect the store.
 func (s *ScreenState) Snapshot() map[string]any {

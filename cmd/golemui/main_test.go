@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -401,13 +402,22 @@ func TestRunBootstrap_IntegrationWithLogs(t *testing.T) {
 	cfg := testConfig()
 	cfg.EntryPointViewID = "transacciones_list"
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testApp := test.NewApp()
 
-	_, err := RunBootstrap(ctx, cfg, false, testApp)
+	ui.SynchronousGridLoad = true
+	defer func() { ui.SynchronousGridLoad = false }()
+
+	ui.UIUpdateWG = sync.WaitGroup{}
+	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("expected successful bootstrap, got error: %v", err)
 	}
+	defer appInstance.Window.Close()
+
+	// Wait for eager async queries to finish completely
+	ui.UIUpdateWG.Wait()
 }
 
 // TestRunBootstrap_HSplitLayout verifies that RunBootstrap creates a split layout
@@ -501,13 +511,15 @@ func TestNavigate_DispatchesUISwapViaFyneDo(t *testing.T) {
 	cfg := testConfig()
 	cfg.EntryPointViewID = "home"
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testApp := test.NewApp()
 
 	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("unexpected bootstrap error: %v", err)
 	}
+	defer appInstance.Window.Close()
 
 	// Verify initial state: window content is split, home label present
 	winContent := appInstance.Window.Content()
@@ -520,6 +532,7 @@ func TestNavigate_DispatchesUISwapViaFyneDo(t *testing.T) {
 	_ = coreMock // registered query serves all LoadScreen calls
 
 	ui.Navigate("home")
+	ui.NavigateWG.Wait()
 
 	// Wait for the async goroutine + fyne.Do to complete.
 	// In test environment, fyne.Do runs synchronously on the calling goroutine,
@@ -559,13 +572,15 @@ func TestNavigate_LogsErrorWithoutCrash(t *testing.T) {
 	cfg := testConfig()
 	cfg.EntryPointViewID = "home"
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testApp := test.NewApp()
 
 	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("unexpected bootstrap error: %v", err)
 	}
+	defer appInstance.Window.Close()
 	_ = coreMock
 
 	split, ok := appInstance.Window.Content().(*container.Split)
@@ -608,13 +623,15 @@ func TestNavigate_DispatchesUISwapViaFyneDo_Enhanced(t *testing.T) {
 	cfg := testConfig()
 	cfg.EntryPointViewID = "home"
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testApp := test.NewApp()
 
 	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("unexpected bootstrap error: %v", err)
 	}
+	defer appInstance.Window.Close()
 
 	split, ok := appInstance.Window.Content().(*container.Split)
 	if !ok {
@@ -624,6 +641,7 @@ func TestNavigate_DispatchesUISwapViaFyneDo_Enhanced(t *testing.T) {
 	// Navigate to the same screen — the mock returns the same layout.
 	// Key assertion: no deadlock, no panic, split layout remains intact.
 	ui.Navigate("home")
+	ui.NavigateWG.Wait()
 
 	var containerUpdated bool
 	for start := time.Now(); time.Since(start) < 2*time.Second; {
@@ -653,13 +671,15 @@ func TestNavigate_ErrorPath_NoFyneDo(t *testing.T) {
 	cfg := testConfig()
 	cfg.EntryPointViewID = "home"
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	testApp := test.NewApp()
 
 	appInstance, err := RunBootstrap(ctx, cfg, false, testApp)
 	if err != nil {
 		t.Fatalf("unexpected bootstrap error: %v", err)
 	}
+	defer appInstance.Window.Close()
 
 	split, ok := appInstance.Window.Content().(*container.Split)
 	if !ok {
