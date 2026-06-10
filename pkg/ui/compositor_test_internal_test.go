@@ -402,6 +402,45 @@ func TestParseChannelName(t *testing.T) {
 	}
 }
 
+func TestDataSet_RowsTypeIsAnySlice(t *testing.T) {
+	// T019-01 RED: Verify Rows is [][]any (interface element kind)
+	rowsType := reflect.TypeOf(DataSet{}.Rows)
+	if rowsType == nil {
+		t.Fatal("DataSet{}.Rows type is nil (uninitialized slice)")
+	}
+	if rowsType.Kind() != reflect.Slice {
+		t.Fatalf("Rows is %v, want a slice", rowsType.Kind())
+	}
+	elem := rowsType.Elem()
+	if elem.Kind() != reflect.Slice {
+		t.Fatalf("Rows inner element is %v, want a slice", elem.Kind())
+	}
+	innerElem := elem.Elem()
+	if innerElem.Kind() != reflect.Interface {
+		t.Fatalf("Rows inner-inner element is %v, want reflect.Interface (any)", innerElem.Kind())
+	}
+}
+
+func TestDataSet_RowsCanHoldNativeTypes(t *testing.T) {
+	// T019-01 TRIANGULATE: Verify native types can be stored
+	ds := DataSet{
+		Headers: []string{"id", "name", "amount", "active"},
+		Rows: [][]any{
+			{int64(42), "Alice", 1000.5, true},
+			{int64(99), "Bob", float64(25.0), false},
+		},
+	}
+	if len(ds.Rows) != 2 {
+		t.Fatalf("Rows count = %d, want 2", len(ds.Rows))
+	}
+	if ds.Rows[0][0] != int64(42) {
+		t.Errorf("Rows[0][0] = %v (%T), want int64(42)", ds.Rows[0][0], ds.Rows[0][0])
+	}
+	if ds.Rows[0][3] != true {
+		t.Errorf("Rows[0][3] = %v (%T), want true", ds.Rows[0][3], ds.Rows[0][3])
+	}
+}
+
 func TestContainsIgnoreCase(t *testing.T) {
 	tests := []struct {
 		s      string

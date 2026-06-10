@@ -10,9 +10,10 @@ type DataSet struct {
 	// Length determines the number of columns.
 	Headers []string
 
-	// Rows contains the string-normalized cell values.
+	// Rows contains the cell values preserving native Go types.
 	// Each inner slice has the same length as Headers.
-	Rows [][]string
+	// Values may be int64, float64, bool, string, or nil.
+	Rows [][]any
 
 	// ColumnWidths contains per-column width hints from metadata.
 	// Each entry corresponds to Headers[i] by index.
