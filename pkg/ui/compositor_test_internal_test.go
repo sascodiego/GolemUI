@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"net/url"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -466,5 +469,138 @@ func TestContainsIgnoreCase(t *testing.T) {
 				t.Errorf("containsIgnoreCase(%q, %q) = %v, want %v", tt.s, tt.substr, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- buildQueryParams tests (Spec 018) ---
+
+func TestBuildQueryParams_SimpleMapping(t *testing.T) {
+	selection := map[string]any{"id": 42, "type": "debit"}
+	mapping := map[string]string{"id": "id", "tipo": "type"}
+
+	result := buildQueryParams(selection, mapping)
+
+	parts := strings.Split(result, "&")
+	sort.Strings(parts)
+
+	expected := []string{"id=42", "tipo=debit"}
+	sort.Strings(expected)
+
+	if len(parts) != len(expected) {
+		t.Fatalf("expected %d parts, got %d: %v", len(expected), len(parts), parts)
+	}
+	for i, p := range parts {
+		if p != expected[i] {
+			t.Errorf("part[%d] = %q, want %q", i, p, expected[i])
+		}
+	}
+}
+
+func TestBuildQueryParams_NestedPath(t *testing.T) {
+	selection := map[string]any{
+		"user": map[string]any{
+			"profile": map[string]any{
+				"id": 99,
+			},
+		},
+	}
+	mapping := map[string]string{"uid": "user.profile.id"}
+
+	result := buildQueryParams(selection, mapping)
+
+	if result != "uid=99" {
+		t.Errorf("expected 'uid=99', got %q", result)
+	}
+}
+
+func TestBuildQueryParams_InvalidPath_Skipped(t *testing.T) {
+	selection := map[string]any{"id": 42}
+	mapping := map[string]string{"id": "id", "missing": "nonexistent.path"}
+
+	result := buildQueryParams(selection, mapping)
+
+	if result != "id=42" {
+		t.Errorf("expected 'id=42' (missing param skipped), got %q", result)
+	}
+}
+
+func TestBuildQueryParams_EmptyMapping(t *testing.T) {
+	selection := map[string]any{"id": 42}
+	mapping := map[string]string{}
+
+	result := buildQueryParams(selection, mapping)
+
+	if result != "" {
+		t.Errorf("expected empty string for empty mapping, got %q", result)
+	}
+}
+
+func TestBuildQueryParams_NilSelectionValue_Skipped(t *testing.T) {
+	selection := map[string]any{"id": 42, "empty": nil}
+	mapping := map[string]string{"id": "id", "empty": "empty"}
+
+	result := buildQueryParams(selection, mapping)
+
+	if result != "id=42" {
+		t.Errorf("expected 'id=42' (nil value skipped), got %q", result)
+	}
+}
+
+func TestBuildQueryParams_URLSpecialChars(t *testing.T) {
+	selection := map[string]any{"name": "hello world", "val": "a&b=c"}
+	mapping := map[string]string{"name": "name", "val": "val"}
+
+	result := buildQueryParams(selection, mapping)
+
+	// Verify all key=value pairs parse correctly
+	parts := strings.Split(result, "&")
+	sort.Strings(parts)
+
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d: %v", len(parts), parts)
+	}
+
+	for _, p := range parts {
+		kv := strings.SplitN(p, "=", 2)
+		if len(kv) != 2 {
+			t.Fatalf("malformed key=value pair: %q", p)
+		}
+		key, _ := url.QueryUnescape(kv[0])
+		val, _ := url.QueryUnescape(kv[1])
+		switch key {
+		case "name":
+			if val != "hello world" {
+				t.Errorf("name value = %q, want 'hello world'", val)
+			}
+		case "val":
+			if val != "a&b=c" {
+				t.Errorf("val value = %q, want 'a&b=c'", val)
+			}
+		default:
+			t.Errorf("unexpected key %q", key)
+		}
+	}
+}
+
+func TestBuildQueryParams_DeterministicOrder(t *testing.T) {
+	selection := map[string]any{"z": 1, "a": 2, "m": 3}
+	mapping := map[string]string{"z": "z", "a": "a", "m": "m"}
+
+	// Run multiple times — map iteration is random, but sort ensures stability
+	var results []string
+	for i := 0; i < 10; i++ {
+		results = append(results, buildQueryParams(selection, mapping))
+	}
+
+	for i := 1; i < len(results); i++ {
+		if results[i] != results[0] {
+			t.Errorf("non-deterministic output: run 0 = %q, run %d = %q", results[0], i, results[i])
+		}
+	}
+
+	// Expected sorted order: a=2&m=3&z=1
+	expected := "a=2&m=3&z=1"
+	if results[0] != expected {
+		t.Errorf("expected %q, got %q", expected, results[0])
 	}
 }
